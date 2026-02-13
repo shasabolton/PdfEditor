@@ -135,7 +135,7 @@ button:not(:disabled),
   overflow: hidden;
 }
 
-#pdfFrame,
+#pdfCanvas,
 #overlayCanvas {
   position: absolute;
   inset: 0;
@@ -144,7 +144,7 @@ button:not(:disabled),
   border: none;
 }
 
-#pdfFrame {
+#pdfCanvas {
   background: #0d1017;
 }
 

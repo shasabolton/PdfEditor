@@ -2,12 +2,13 @@
 
 ## Project Rules (must remain true)
 
-1. **Vanilla JavaScript only** (no npm packages, no external JS libraries, no framework).
-2. **No server required** (fully client-side, runs from static files).
-3. **No JS modules/build tooling** (single `app.js` loaded by `<script src="app.js">`).
-4. **Open directly in browser** by loading `index.html`.
-5. **Mobile + desktop friendly UI** via responsive CSS.
-6. **All processing happens locally in browser memory**; files are not uploaded.
+1. **Vanilla JavaScript app code** (no framework, no build step, no server).
+2. **Locally vendored PDF renderer** (`vendor/pdf.min.js`) is included in-repo for reliable canvas preview.
+3. **No server required** (fully client-side, runs from static files).
+4. **No JS modules/build tooling** (`app.js` loaded as a plain script).
+5. **Open directly in browser** by loading `index.html`.
+6. **Mobile + desktop friendly UI** via responsive CSS.
+7. **All processing happens locally in browser memory**; files are not uploaded.
 
 ---
 
@@ -33,8 +34,8 @@ The editor is intended to support this workflow:
 ### File + viewing
 
 - Open local PDF with file picker.
-- PDF displays in embedded browser PDF viewer when supported.
-- Includes **Open In Browser** button for SPCK/mobile webview compatibility.
+- PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
+- Includes **Open In Browser** fallback button.
 - Page-by-page navigation (`Prev` / `Next`).
 
 ### Page operations
@@ -62,11 +63,11 @@ The editor is intended to support this workflow:
 
 ## Compatibility / Limitations (important)
 
-Because this is a strict no-dependency vanilla implementation:
+Because this is a strict client-side static implementation (with locally bundled renderer code):
 
 - Editing works best on **non-encrypted PDFs using classic xref tables**.
 - Some PDFs (especially xref streams/object streams/encrypted PDFs) may open in **view-only mode**.
-- Some mobile/webview environments cannot render embedded PDFs reliably; use **Open In Browser** in that case.
+- Extremely large/corrupt PDFs may fail preview and should be opened with **Open In Browser** fallback.
 - Existing complex annotation structures may not always be fully preserved.
 - Draw/text placement is annotation-based and may vary slightly across PDF viewers.
 
@@ -89,3 +90,5 @@ If a PDF cannot be parsed for editing, the app still lets you view it.
 - `index.html` - UI markup
 - `styles.css` - responsive styling
 - `app.js` - all editor logic (parser, UI, interactions, export)
+- `vendor/pdf.min.js` - bundled PDF canvas renderer for cross-browser preview
+- `vendor/pdf.worker.min.js` - bundled worker file (kept locally; app currently uses `disableWorker: true` for compatibility)

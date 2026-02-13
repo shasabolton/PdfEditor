@@ -16,7 +16,8 @@
   const pageList = document.getElementById("pageList");
   const textList = document.getElementById("textList");
   const viewerContainer = document.getElementById("viewerContainer");
-  const pdfFrame = document.getElementById("pdfFrame");
+  const pdfCanvas = document.getElementById("pdfCanvas");
+  const pdfCtx = pdfCanvas.getContext("2d");
   const overlayCanvas = document.getElementById("overlayCanvas");
   const overlayCtx = overlayCanvas.getContext("2d");
 
@@ -26,11 +27,16 @@
     fileName: "",
     sourceBytes: null,
     sourceUrl: "",
-    sourceFrameUrl: "",
-    sourceFrameMode: "",
-    currentFrameSrc: "",
-    previewBytes: null,
-    previewUrl: "",
+    previewDoc: null,
+    pdfJsReady: false,
+    activeRenderTask: null,
+    renderRequestId: 0,
+    renderBox: {
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+    },
     parsed: null,
     canEdit: false,
     pageOrder: [],
@@ -44,6 +50,7 @@
     },
   };
 
+  configurePdfJs();
   bindEvents();
   resizeOverlayCanvas();
   renderEverything();
@@ -80,8 +87,22 @@
 
     window.addEventListener("resize", () => {
       resizeOverlayCanvas();
-      drawOverlay();
+      renderCurrentPdfPage();
     });
+  }
+
+  function configurePdfJs() {
+    try {
+      if (!window.pdfjsLib || !window.pdfjsLib.GlobalWorkerOptions) {
+        state.pdfJsReady = false;
+        return;
+      }
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+      state.pdfJsReady = true;
+    } catch (error) {
+      console.error(error);
+      state.pdfJsReady = false;
+    }
   }
 
   function onFileSelected(event) {
@@ -94,17 +115,26 @@
     state.fileName = file.name;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const bytes = new Uint8Array(reader.result);
         state.sourceBytes = bytes;
         state.sourceUrl = URL.createObjectURL(
           new Blob([bytes], { type: "application/pdf" })
         );
-        const frameChoice = buildPreferredFrameUrl(bytes, state.sourceUrl);
-        state.sourceFrameUrl = frameChoice.url;
-        state.sourceFrameMode = frameChoice.mode;
-        state.currentFrameSrc = "";
+
+        if (!state.pdfJsReady) {
+          setStatus(
+            "Preview renderer failed to initialize. You can still open externally and save edits.",
+            "error"
+          );
+        } else {
+          const loadingTask = window.pdfjsLib.getDocument({
+            data: bytes,
+            disableWorker: true,
+          });
+          state.previewDoc = await loadingTask.promise;
+        }
 
         let parsed = null;
         try {
@@ -113,7 +143,7 @@
           state.canEdit = false;
           state.parsed = null;
           setStatus(
-            "Loaded in view-only mode. If preview stays blank in mobile/webview, tap 'Open In Browser'.",
+            "Loaded in view-only mode. Save is disabled for this PDF format in this dependency-free writer.",
             "error"
           );
           renderEverything();
@@ -123,14 +153,22 @@
         state.canEdit = true;
         state.parsed = parsed;
         initializePageModels(parsed);
-        setStatus(
-          "PDF loaded. You can reorder pages, rotate/scale/delete, draw, add/edit text, and save. If preview is blank on mobile/webview, tap 'Open In Browser'.",
-          "ok"
-        );
+        state.currentPageActiveIndex = 0;
+        if (state.previewDoc) {
+          setStatus(
+            "PDF loaded. Live preview uses in-app canvas rendering (no browser PDF plugin needed).",
+            "ok"
+          );
+        } else {
+          setStatus(
+            "PDF loaded, but preview renderer is unavailable in this environment. Use Open In Browser for visual reference.",
+            "error"
+          );
+        }
         renderEverything();
       } catch (error) {
         console.error(error);
-        setStatus("Failed to read this file as PDF.", "error");
+        setStatus("Failed to open this PDF for preview.", "error");
       } finally {
         fileInput.value = "";
       }
@@ -186,7 +224,7 @@
       return;
     }
 
-    const canvasSize = getCanvasCssSize();
+    const canvasSize = getRenderCssSize();
     const sizePx = Math.max(10, Number(sizeInput.value) * 3);
     const textItem = {
       x: 0.5,
@@ -313,7 +351,7 @@
         return;
       }
       textItem.text = next;
-      const canvasSize = getCanvasCssSize();
+      const canvasSize = getRenderCssSize();
       const sizePx = Math.max(8, textItem.sizeNorm * canvasSize.height);
       textItem.widthNorm = estimateTextWidthNorm(next, sizePx, canvasSize.width);
       drawOverlay();
@@ -333,7 +371,7 @@
     if (action === "text-size-plus" || action === "text-size-minus") {
       const delta = action === "text-size-plus" ? 0.01 : -0.01;
       textItem.sizeNorm = Math.max(0.01, Math.min(0.3, textItem.sizeNorm + delta));
-      const canvasSize = getCanvasCssSize();
+      const canvasSize = getRenderCssSize();
       const sizePx = textItem.sizeNorm * canvasSize.height;
       textItem.widthNorm = estimateTextWidthNorm(
         textItem.text,
@@ -360,7 +398,7 @@
       if (!point) {
         return;
       }
-      const widthNorm = Number(sizeInput.value) / Math.max(1, getCanvasCssSize().width);
+      const widthNorm = Number(sizeInput.value) / Math.max(1, getRenderCssSize().width);
       state.drawing.pointerId = event.pointerId;
       state.drawing.currentStroke = {
         color: colorInput.value,
@@ -381,7 +419,7 @@
       if (!text) {
         return;
       }
-      const canvasSize = getCanvasCssSize();
+      const canvasSize = getRenderCssSize();
       const sizePx = Math.max(10, Number(sizeInput.value) * 3);
       const marks = getOrCreatePageAnnotations(pageId);
       marks.texts.push({
@@ -445,8 +483,22 @@
     if (!rect.width || !rect.height) {
       return null;
     }
-    const x = (event.clientX - rect.left) / rect.width;
-    const y = (event.clientY - rect.top) / rect.height;
+    const xPx = event.clientX - rect.left;
+    const yPx = event.clientY - rect.top;
+    const box = state.renderBox;
+    if (!box || box.width <= 0 || box.height <= 0) {
+      return null;
+    }
+    if (
+      xPx < box.left ||
+      xPx > box.left + box.width ||
+      yPx < box.top ||
+      yPx > box.top + box.height
+    ) {
+      return null;
+    }
+    const x = (xPx - box.left) / box.width;
+    const y = (yPx - box.top) / box.height;
     return {
       x: Math.max(0, Math.min(1, x)),
       y: Math.max(0, Math.min(1, y)),
@@ -482,48 +534,32 @@
     }
   }
 
-  function rebuildEditedPreview(includeAnnotations) {
-    if (!state.canEdit || !state.parsed) {
-      return;
-    }
-    try {
-      const bytes = buildEditedPdf(includeAnnotations);
-      updatePreviewBlob(bytes);
-      setStatus(
-        includeAnnotations
-          ? "Preview updated with drawing/text."
-          : "Preview updated.",
-        "ok"
-      );
-    } catch (error) {
-      console.error(error);
-      setStatus(error.message || "Failed to rebuild preview.", "error");
-    }
-  }
-
-  function updatePreviewBlob(bytes) {
-    state.previewBytes = bytes;
-    if (state.previewUrl) {
-      URL.revokeObjectURL(state.previewUrl);
-    }
-    state.previewUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-  }
-
   function resetLoadedDocument() {
+    if (state.activeRenderTask && typeof state.activeRenderTask.cancel === "function") {
+      try {
+        state.activeRenderTask.cancel();
+      } catch (error) {
+        console.warn("Failed to cancel previous PDF render task.", error);
+      }
+    }
+    state.activeRenderTask = null;
+    state.renderRequestId += 1;
+
+    if (state.previewDoc && typeof state.previewDoc.destroy === "function") {
+      try {
+        state.previewDoc.destroy();
+      } catch (error) {
+        console.warn("Failed to destroy previous preview document.", error);
+      }
+    }
+
     if (state.sourceUrl) {
       URL.revokeObjectURL(state.sourceUrl);
-    }
-    if (state.previewUrl) {
-      URL.revokeObjectURL(state.previewUrl);
     }
     state.fileName = "";
     state.sourceBytes = null;
     state.sourceUrl = "";
-    state.sourceFrameUrl = "";
-    state.sourceFrameMode = "";
-    state.currentFrameSrc = "";
-    state.previewBytes = null;
-    state.previewUrl = "";
+    state.previewDoc = null;
     state.parsed = null;
     state.canEdit = false;
     state.pageOrder = [];
@@ -533,16 +569,26 @@
     state.mode = "view";
     state.drawing.pointerId = null;
     state.drawing.currentStroke = null;
-    pdfFrame.removeAttribute("src");
+    state.renderBox = {
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+    };
+    clearPdfCanvas();
+    drawOverlay();
   }
 
   function renderEverything() {
     const editable = state.canEdit && !!state.parsed;
+    const previewCount = getPreviewPageCount();
+    normalizeCurrentPageIndex();
+
     saveBtn.disabled = !editable;
     openExternalBtn.disabled = !state.sourceUrl;
-    prevPageBtn.disabled = !editable || state.currentPageActiveIndex <= 0;
+    prevPageBtn.disabled = previewCount < 2 || state.currentPageActiveIndex <= 0;
     nextPageBtn.disabled =
-      !editable || state.currentPageActiveIndex >= getActivePageIds().length - 1;
+      previewCount < 2 || state.currentPageActiveIndex >= previewCount - 1;
     modeSelect.disabled = !editable;
     colorInput.disabled = !editable;
     sizeInput.disabled = !editable;
@@ -555,44 +601,140 @@
       pageList.innerHTML = "";
       textList.innerHTML = "";
       updateOverlayInteractivity();
+      clearPdfCanvas();
       drawOverlay();
       return;
     }
 
     if (!editable) {
-      pageIndicator.textContent = "View-only mode";
       pageList.innerHTML =
-        '<div class="pages-help">This file can be viewed but not edited by this dependency-free editor.</div>';
+        '<div class="pages-help">View-only mode: this PDF can be previewed, but this dependency-free writer cannot save edits for this format.</div>';
       textList.innerHTML = "";
-      updatePdfFrameSource();
-      updateOverlayInteractivity();
+    } else {
+      renderPageList();
+      renderTextList();
+    }
+
+    renderPageIndicator();
+    updateOverlayInteractivity();
+    renderCurrentPdfPage();
+  }
+
+  function renderPageIndicator() {
+    const previewCount = getPreviewPageCount();
+    if (!previewCount) {
+      pageIndicator.textContent = "No preview pages";
+      return;
+    }
+    const viewPageNumber = state.currentPageActiveIndex + 1;
+    if (!state.canEdit || !state.parsed) {
+      pageIndicator.textContent = `Page ${viewPageNumber} / ${previewCount}`;
+      return;
+    }
+    const currentId = getCurrentPageId();
+    const page = currentId ? state.pagesById.get(currentId) : null;
+    if (!page) {
+      pageIndicator.textContent = `Output page ${viewPageNumber} / ${previewCount}`;
+      return;
+    }
+    pageIndicator.textContent =
+      `Output page ${viewPageNumber} / ${previewCount} ` +
+      `(source page ${page.sourcePageNumber})`;
+  }
+
+  async function renderCurrentPdfPage() {
+    resizeOverlayCanvas();
+    resizePdfCanvas();
+
+    if (!state.previewDoc) {
+      clearPdfCanvas();
+      state.renderBox = {
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      };
       drawOverlay();
       return;
     }
 
-    normalizeCurrentPageIndex();
-    renderPageList();
-    renderTextList();
-    renderPageIndicator();
-    updatePdfFrameSource();
-    updateOverlayInteractivity();
-    drawOverlay();
-  }
+    const pageNumber = getCurrentPreviewSourcePageNumber();
+    if (!pageNumber) {
+      clearPdfCanvas();
+      state.renderBox = {
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      };
+      drawOverlay();
+      return;
+    }
 
-  function renderPageIndicator() {
-    const active = getActivePageIds();
-    if (!active.length) {
-      pageIndicator.textContent = "No pages";
-      return;
+    if (state.activeRenderTask && typeof state.activeRenderTask.cancel === "function") {
+      try {
+        state.activeRenderTask.cancel();
+      } catch (error) {
+        console.warn("Unable to cancel prior PDF render task.", error);
+      }
     }
-    const pageNumber = state.currentPageActiveIndex + 1;
-    const currentId = getCurrentPageId();
-    const page = currentId ? state.pagesById.get(currentId) : null;
-    if (page) {
-      pageIndicator.textContent = `Output page ${pageNumber} / ${active.length} (source page ${page.sourcePageNumber})`;
-      return;
+    state.activeRenderTask = null;
+
+    const requestId = ++state.renderRequestId;
+    try {
+      const page = await state.previewDoc.getPage(pageNumber);
+      if (requestId !== state.renderRequestId) {
+        return;
+      }
+
+      const currentId = getCurrentPageId();
+      const model = currentId ? state.pagesById.get(currentId) : null;
+      const extraRotation = model ? model.rotateDelta : 0;
+      const scaleMultiplier = model ? model.scale : 1;
+      const rotation = normalizeRotation(page.rotate + extraRotation);
+
+      const rect = viewerContainer.getBoundingClientRect();
+      const cssWidth = Math.max(1, rect.width);
+      const cssHeight = Math.max(1, rect.height);
+      const baseViewport = page.getViewport({ scale: 1, rotation });
+      const fitScale = Math.min(
+        cssWidth / Math.max(1, baseViewport.width),
+        cssHeight / Math.max(1, baseViewport.height)
+      );
+      const finalScale = Math.max(0.05, fitScale * Math.max(0.25, scaleMultiplier));
+      const viewport = page.getViewport({ scale: finalScale, rotation });
+      const left = (cssWidth - viewport.width) / 2;
+      const top = (cssHeight - viewport.height) / 2;
+
+      clearPdfCanvas();
+      state.renderBox = {
+        left,
+        top,
+        width: viewport.width,
+        height: viewport.height,
+      };
+
+      const renderTask = page.render({
+        canvasContext: pdfCtx,
+        viewport,
+        transform: [1, 0, 0, 1, left, top],
+      });
+      state.activeRenderTask = renderTask;
+      await renderTask.promise;
+      if (requestId !== state.renderRequestId) {
+        return;
+      }
+      state.activeRenderTask = null;
+      drawOverlay();
+    } catch (error) {
+      if (String(error && error.name) === "RenderingCancelledException") {
+        return;
+      }
+      console.error(error);
+      setStatus("Preview rendering failed for this page.", "error");
+      clearPdfCanvas();
+      drawOverlay();
     }
-    pageIndicator.textContent = `Output page ${pageNumber} / ${active.length}`;
   }
 
   function renderPageList() {
@@ -682,7 +824,7 @@
     textList.innerHTML = marks.texts
       .map((item, index) => {
         const preview = escapeHtml(item.text).slice(0, 120);
-        const sizePx = Math.round(item.sizeNorm * getCanvasCssSize().height);
+        const sizePx = Math.round(item.sizeNorm * getRenderCssSize().height);
         return `
           <div class="text-item">
             <div class="text-item-head">#${index + 1}: ${preview || "(empty)"} | ${sizePx}px</div>
@@ -698,37 +840,54 @@
       .join("");
   }
 
-  function updatePdfFrameSource() {
-    if (!state.canEdit || !state.parsed) {
-      const baseUrl = state.sourceFrameUrl || state.sourceUrl;
-      if (!baseUrl) {
-        pdfFrame.removeAttribute("src");
-        state.currentFrameSrc = "";
-        return;
-      }
-      const nextSrc = `${baseUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
-      if (state.currentFrameSrc !== nextSrc) {
-        pdfFrame.src = nextSrc;
-        state.currentFrameSrc = nextSrc;
-      }
-      return;
-    }
+  function clearPdfCanvas() {
+    const rect = viewerContainer.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    pdfCtx.clearRect(0, 0, width, height);
+  }
 
-    const activeCount = getActivePageIds().length;
-    if (!activeCount) {
-      pdfFrame.removeAttribute("src");
-      state.currentFrameSrc = "";
-      return;
+  function resizePdfCanvas() {
+    const rect = viewerContainer.getBoundingClientRect();
+    const cssWidth = Math.max(1, Math.floor(rect.width));
+    const cssHeight = Math.max(1, Math.floor(rect.height));
+    const dpr = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.floor(cssWidth * dpr));
+    const pixelHeight = Math.max(1, Math.floor(cssHeight * dpr));
+
+    if (pdfCanvas.width !== pixelWidth || pdfCanvas.height !== pixelHeight) {
+      pdfCanvas.width = pixelWidth;
+      pdfCanvas.height = pixelHeight;
+      pdfCanvas.style.width = `${cssWidth}px`;
+      pdfCanvas.style.height = `${cssHeight}px`;
     }
-    const baseUrl = state.sourceFrameUrl || state.sourceUrl;
-    const currentId = getCurrentPageId();
-    const model = currentId ? state.pagesById.get(currentId) : null;
-    const page = model ? model.sourcePageNumber : state.currentPageActiveIndex + 1;
-    const nextSrc = `${baseUrl}#page=${page}&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
-    if (state.currentFrameSrc !== nextSrc) {
-      pdfFrame.src = nextSrc;
-      state.currentFrameSrc = nextSrc;
+    pdfCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function getCurrentPreviewSourcePageNumber() {
+    if (!state.previewDoc) {
+      return 0;
     }
+    const maxPages = Math.max(1, state.previewDoc.numPages || 1);
+    if (!state.canEdit || !state.parsed) {
+      return Math.max(1, Math.min(maxPages, state.currentPageActiveIndex + 1));
+    }
+    const pageId = getCurrentPageId();
+    const page = pageId ? state.pagesById.get(pageId) : null;
+    if (!page) {
+      return Math.max(1, Math.min(maxPages, state.currentPageActiveIndex + 1));
+    }
+    return Math.max(1, Math.min(maxPages, page.sourcePageNumber));
+  }
+
+  function getPreviewPageCount() {
+    if (state.canEdit && state.parsed) {
+      return getActivePageIds().length;
+    }
+    if (state.previewDoc && Number.isFinite(state.previewDoc.numPages)) {
+      return Math.max(0, state.previewDoc.numPages);
+    }
+    return 0;
   }
 
   function drawOverlay() {
@@ -737,6 +896,9 @@
     overlayCtx.clearRect(0, 0, width, height);
 
     if (!state.canEdit) {
+      return;
+    }
+    if (!state.renderBox.width || !state.renderBox.height) {
       return;
     }
     const pageId = getCurrentPageId();
@@ -749,41 +911,59 @@
     }
 
     for (const stroke of marks.strokes) {
-      drawStrokePreview(stroke, width, height);
+      drawStrokePreview(stroke);
     }
     if (state.drawing.currentStroke) {
-      drawStrokePreview(state.drawing.currentStroke, width, height);
+      drawStrokePreview(state.drawing.currentStroke);
     }
     for (const textItem of marks.texts) {
-      drawTextPreview(textItem, width, height);
+      drawTextPreview(textItem);
     }
   }
 
-  function drawStrokePreview(stroke, width, height) {
+  function drawStrokePreview(stroke) {
     if (!stroke || !stroke.points || stroke.points.length < 2) {
+      return;
+    }
+    const box = state.renderBox;
+    if (!box || !box.width || !box.height) {
       return;
     }
     overlayCtx.save();
     overlayCtx.strokeStyle = stroke.color || "#ff0000";
     overlayCtx.lineCap = "round";
     overlayCtx.lineJoin = "round";
-    overlayCtx.lineWidth = Math.max(1, stroke.widthNorm * width);
+    overlayCtx.lineWidth = Math.max(1, stroke.widthNorm * box.width);
     overlayCtx.beginPath();
-    overlayCtx.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+    overlayCtx.moveTo(
+      box.left + stroke.points[0].x * box.width,
+      box.top + stroke.points[0].y * box.height
+    );
     for (let i = 1; i < stroke.points.length; i += 1) {
-      overlayCtx.lineTo(stroke.points[i].x * width, stroke.points[i].y * height);
+      overlayCtx.lineTo(
+        box.left + stroke.points[i].x * box.width,
+        box.top + stroke.points[i].y * box.height
+      );
     }
     overlayCtx.stroke();
     overlayCtx.restore();
   }
 
-  function drawTextPreview(textItem, width, height) {
+  function drawTextPreview(textItem) {
+    const box = state.renderBox;
+    if (!box || !box.width || !box.height) {
+      return;
+    }
     overlayCtx.save();
-    const fontPx = Math.max(8, Math.round(textItem.sizeNorm * height));
+    const fontPx = Math.max(8, Math.round(textItem.sizeNorm * box.height));
     overlayCtx.font = `${fontPx}px sans-serif`;
     overlayCtx.fillStyle = textItem.color || "#ffffff";
     overlayCtx.textBaseline = "top";
-    overlayCtx.fillText(textItem.text || "", textItem.x * width, textItem.y * height);
+    overlayCtx.fillText(
+      textItem.text || "",
+      box.left + textItem.x * box.width,
+      box.top + textItem.y * box.height
+    );
     overlayCtx.restore();
   }
 
@@ -828,15 +1008,25 @@
     };
   }
 
+  function getRenderCssSize() {
+    if (state.renderBox && state.renderBox.width > 0 && state.renderBox.height > 0) {
+      return {
+        width: state.renderBox.width,
+        height: state.renderBox.height,
+      };
+    }
+    return getCanvasCssSize();
+  }
+
   function setCurrentPageActiveIndex(next) {
-    const activeIds = getActivePageIds();
-    if (!activeIds.length) {
+    const count = getPreviewPageCount();
+    if (!count) {
       state.currentPageActiveIndex = 0;
       return;
     }
     state.currentPageActiveIndex = Math.max(
       0,
-      Math.min(activeIds.length - 1, next)
+      Math.min(count - 1, next)
     );
   }
 
@@ -852,6 +1042,9 @@
   }
 
   function getCurrentPageId() {
+    if (!state.canEdit || !state.parsed) {
+      return "";
+    }
     const activeIds = getActivePageIds();
     if (!activeIds.length) {
       return "";
@@ -1844,31 +2037,8 @@
     return out;
   }
 
-  function buildPreferredFrameUrl(bytes, blobUrl) {
-    if (!bytes || !bytes.length || !blobUrl) {
-      return { url: blobUrl || "", mode: "blob-url" };
-    }
-    try {
-      // Mobile/webview engines are often more reliable with data URLs than blob URLs.
-      if (bytes.length <= 6 * 1024 * 1024) {
-        return {
-          url: bytesToPdfDataUrl(bytes),
-          mode: "data-url",
-        };
-      }
-    } catch (error) {
-      console.warn("Falling back to blob preview URL", error);
-    }
-    return { url: blobUrl, mode: "blob-url" };
-  }
-
-  function bytesToPdfDataUrl(bytes) {
-    const binary = bytesToLatin1(bytes);
-    return `data:application/pdf;base64,${btoa(binary)}`;
-  }
-
   function openPdfExternally() {
-    const openUrl = state.sourceFrameUrl || state.sourceUrl;
+    const openUrl = state.sourceUrl;
     if (!openUrl) {
       setStatus("Load a PDF first.", "error");
       return;

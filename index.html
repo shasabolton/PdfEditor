@@ -43,14 +43,11 @@
       </div>
 
       <div id="viewerContainer">
-        <iframe
-          id="pdfFrame"
-          title="PDF preview"
-        ></iframe>
+        <canvas id="pdfCanvas" aria-label="PDF preview canvas"></canvas>
         <canvas id="overlayCanvas"></canvas>
       </div>
       <p class="viewer-help">
-        If embedded preview is blank in SPCK/mobile webviews, tap <strong>Open In Browser</strong>.
+        Preview is rendered directly in-app. If a specific file still fails to display, tap <strong>Open In Browser</strong>.
       </p>
 
       <div class="text-editor-block">
@@ -70,6 +67,7 @@
     </aside>
   </main>
 
+  <script src="vendor/pdf.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
