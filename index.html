@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vanilla JS Client-Side PDF Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Vanilla PDF Editor</h1>
+    <div class="topbar-actions">
+      <label class="file-input-label">
+        <span>Open PDF</span>
+        <input id="fileInput" type="file" accept="application/pdf">
+      </label>
+      <button id="saveBtn" type="button" disabled>Save PDF</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="viewer-section">
+      <div class="viewer-toolbar">
+        <button id="prevPageBtn" type="button" disabled>Prev</button>
+        <span id="pageIndicator">No file loaded</span>
+        <button id="nextPageBtn" type="button" disabled>Next</button>
+
+        <label for="modeSelect">Mode</label>
+        <select id="modeSelect" disabled>
+          <option value="view">View</option>
+          <option value="draw">Draw</option>
+          <option value="text">Text</option>
+        </select>
+
+        <label for="colorInput">Color</label>
+        <input id="colorInput" type="color" value="#d02626" disabled>
+
+        <label for="sizeInput">Size</label>
+        <input id="sizeInput" type="range" min="1" max="24" step="1" value="4" disabled>
+
+        <button id="clearMarksBtn" type="button" disabled>Clear Page Draw/Text</button>
+      </div>
+
+      <div id="viewerContainer">
+        <iframe
+          id="pdfFrame"
+          title="PDF preview"
+        ></iframe>
+        <canvas id="overlayCanvas"></canvas>
+      </div>
+
+      <div class="text-editor-block">
+        <button id="addCenteredTextBtn" type="button" disabled>Add Centered Text</button>
+        <div id="textList" aria-live="polite"></div>
+      </div>
+
+      <p id="statusText">Load a PDF to begin.</p>
+    </section>
+
+    <aside class="pages-section">
+      <h2>Pages</h2>
+      <div class="pages-help">
+        Use Move/Rotate/Scale/Delete per page.
+      </div>
+      <div id="pageList"></div>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

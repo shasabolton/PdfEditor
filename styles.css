@@ -1,0 +1,283 @@
+:root {
+  color-scheme: light dark;
+  --bg: #101217;
+  --panel: #171b24;
+  --panel-soft: #1f2532;
+  --text: #f5f7ff;
+  --text-dim: #c9d1e2;
+  --accent: #6aa3ff;
+  --danger: #f46262;
+  --ok: #6bd58f;
+  --border: #2d3648;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+.file-input-label {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  border-radius: 0.5rem;
+  padding: 0.45rem 0.75rem;
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button:not(:disabled),
+.file-input-label {
+  cursor: pointer;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+}
+
+.topbar h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.file-input-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.file-input-label input {
+  width: 0.01px;
+  height: 0.01px;
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24rem;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.viewer-section,
+.pages-section {
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: var(--panel);
+  padding: 0.75rem;
+}
+
+.viewer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.viewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.viewer-toolbar label {
+  color: var(--text-dim);
+}
+
+#viewerContainer {
+  position: relative;
+  width: 100%;
+  min-height: 60vh;
+  background: #0d1017;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+
+#pdfFrame,
+#overlayCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+#pdfFrame {
+  background: #0d1017;
+}
+
+#overlayCanvas {
+  pointer-events: none;
+}
+
+.text-editor-block {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.65rem;
+  background: var(--panel-soft);
+  display: grid;
+  gap: 0.5rem;
+}
+
+#textList {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.text-item {
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.45rem;
+  display: grid;
+  gap: 0.35rem;
+  background: #131928;
+}
+
+.text-item-head {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+.text-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+#statusText {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+#statusText.ok {
+  color: var(--ok);
+}
+
+#statusText.error {
+  color: var(--danger);
+}
+
+.pages-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.pages-section h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.pages-help {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+#pageList {
+  display: grid;
+  gap: 0.6rem;
+  overflow: auto;
+  max-height: calc(100vh - 14rem);
+  padding-right: 0.25rem;
+}
+
+.page-row {
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  padding: 0.55rem;
+  display: grid;
+  gap: 0.45rem;
+  background: #131928;
+}
+
+.page-row.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.page-row.deleted {
+  opacity: 0.62;
+}
+
+.page-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.page-row-meta {
+  color: var(--text-dim);
+  font-size: 0.83rem;
+}
+
+.page-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.danger {
+  border-color: #8f3737;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  #pageList {
+    max-height: none;
+  }
+
+  #viewerContainer {
+    min-height: 50vh;
+  }
+}
