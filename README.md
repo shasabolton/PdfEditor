@@ -3,7 +3,7 @@
 ## Project Rules (must remain true)
 
 1. **Vanilla JavaScript app code** (no framework, no build step, no server).
-2. **Locally vendored PDF renderer** (`vendor/pdf.min.js`) is included in-repo for reliable canvas preview.
+2. **Locally vendored PDF libraries** are included in-repo (`vendor/pdf.min.js`, `vendor/pdf-lib.min.js`).
 3. **No server required** (fully client-side, runs from static files).
 4. **No JS modules/build tooling** (`app.js` loaded as a plain script).
 5. **Open directly in browser** by loading `index.html`.
@@ -57,7 +57,7 @@ The editor is intended to support this workflow:
 ### Save
 
 - Save exports a new `*-edited.pdf`.
-- Output PDF generation is done entirely in-browser by appending an incremental PDF update.
+- Output PDF generation is done entirely in-browser using a local PDF editing library (no server).
 
 ---
 
@@ -65,8 +65,8 @@ The editor is intended to support this workflow:
 
 Because this is a strict client-side static implementation (with locally bundled renderer code):
 
-- Editing works best on **non-encrypted PDFs using classic xref tables**.
-- Some PDFs (especially xref streams/object streams/encrypted PDFs) may open in **view-only mode**.
+- Most standard PDFs are editable, including many modern xref/object-stream files.
+- Encrypted/password-protected PDFs can still open for preview but may remain **view-only**.
 - Extremely large/corrupt PDFs may fail preview and should be opened with **Open In Browser** fallback.
 - Existing complex annotation structures may not always be fully preserved.
 - Draw/text placement is annotation-based and may vary slightly across PDF viewers.
@@ -92,3 +92,4 @@ If a PDF cannot be parsed for editing, the app still lets you view it.
 - `app.js` - all editor logic (parser, UI, interactions, export)
 - `vendor/pdf.min.js` - bundled PDF canvas renderer for cross-browser preview
 - `vendor/pdf.worker.min.js` - bundled worker file (kept locally; app currently uses `disableWorker: true` for compatibility)
+- `vendor/pdf-lib.min.js` - bundled PDF editing/writing library for broader save/edit support

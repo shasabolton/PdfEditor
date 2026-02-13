@@ -29,6 +29,7 @@
     sourceUrl: "",
     previewDoc: null,
     pdfJsReady: false,
+    pdfLibReady: false,
     activeRenderTask: null,
     renderRequestId: 0,
     renderBox: {
@@ -51,6 +52,7 @@
   };
 
   configurePdfJs();
+  configurePdfLib();
   bindEvents();
   resizeOverlayCanvas();
   renderEverything();
@@ -105,6 +107,15 @@
     }
   }
 
+  function configurePdfLib() {
+    state.pdfLibReady = !!(
+      window.PDFLib &&
+      window.PDFLib.PDFDocument &&
+      window.PDFLib.degrees &&
+      window.PDFLib.rgb
+    );
+  }
+
   function onFileSelected(event) {
     const file = event.target.files && event.target.files[0];
     if (!file) {
@@ -136,14 +147,13 @@
           state.previewDoc = await loadingTask.promise;
         }
 
-        let parsed = null;
-        try {
-          parsed = parsePdfForEditing(bytes);
-        } catch (parseError) {
+        const editableInit = await initializeEditableModels(bytes);
+        if (!editableInit.ok) {
           state.canEdit = false;
           state.parsed = null;
           setStatus(
-            "Loaded in view-only mode. Save is disabled for this PDF format in this dependency-free writer.",
+            editableInit.reason ||
+              "Loaded in view-only mode. Save is disabled for this PDF.",
             "error"
           );
           renderEverything();
@@ -151,8 +161,10 @@
         }
 
         state.canEdit = true;
-        state.parsed = parsed;
-        initializePageModels(parsed);
+        state.parsed = {
+          pageCount: editableInit.pages.length,
+        };
+        initializePageModels(editableInit.pages);
         state.currentPageActiveIndex = 0;
         if (state.previewDoc) {
           setStatus(
@@ -179,13 +191,54 @@
     reader.readAsArrayBuffer(file);
   }
 
-  function onSaveClick() {
+  async function initializeEditableModels(bytes) {
+    if (!state.pdfLibReady) {
+      return {
+        ok: false,
+        reason: "Loaded in view-only mode. The local PDF editing engine is unavailable.",
+      };
+    }
+    try {
+      const pdfDoc = await window.PDFLib.PDFDocument.load(bytes, {
+        updateMetadata: false,
+      });
+      const pages = pdfDoc.getPages().map((page, index) => ({
+        sourcePageNumber: index + 1,
+        baseRotate: normalizeRotation(page.getRotation().angle || 0),
+      }));
+      if (!pages.length) {
+        return {
+          ok: false,
+          reason: "Loaded in view-only mode. This PDF has no readable pages.",
+        };
+      }
+      return {
+        ok: true,
+        pages,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: getEditableLoadErrorMessage(error),
+      };
+    }
+  }
+
+  function getEditableLoadErrorMessage(error) {
+    const message = String((error && error.message) || "").toLowerCase();
+    if (message.includes("encrypted")) {
+      return "Loaded in view-only mode. This PDF is encrypted/password-protected.";
+    }
+    return "Loaded in view-only mode. This PDF format cannot be edited by the local writer.";
+  }
+
+  async function onSaveClick() {
     if (!state.canEdit || !state.parsed) {
       setStatus("Load an editable PDF first.", "error");
       return;
     }
     try {
-      const bytes = buildEditedPdf(true);
+      const bytes = await buildEditedPdfWithPdfLib();
       const downloadName = buildOutputFileName(state.fileName);
       downloadBytes(bytes, downloadName);
       setStatus(`Saved ${downloadName}`, "ok");
@@ -505,25 +558,19 @@
     };
   }
 
-  function initializePageModels(parsed) {
+  function initializePageModels(pageDescriptors) {
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
     state.currentPageActiveIndex = 0;
 
-    for (let i = 0; i < parsed.pages.length; i += 1) {
-      const page = parsed.pages[i];
-      const id = `${page.ref.num}_${page.ref.gen}_${i + 1}`;
+    for (let i = 0; i < pageDescriptors.length; i += 1) {
+      const page = pageDescriptors[i];
+      const id = `page_${i + 1}`;
       const model = {
         id,
-        sourcePageNumber: i + 1,
-        ref: page.ref,
-        dictEntries: page.dictEntries,
-        effectiveMediaBox: page.effectiveMediaBox,
-        effectiveRotate: page.effectiveRotate,
-        effectiveResources: page.effectiveResources,
-        existingAnnotRefs: page.existingAnnotRefs,
-        annotsResolved: page.annotsResolved,
+        sourcePageNumber: page.sourcePageNumber || i + 1,
+        baseRotate: normalizeRotation(page.baseRotate || 0),
         rotateDelta: 0,
         scale: 1,
         deleted: false,
@@ -608,7 +655,7 @@
 
     if (!editable) {
       pageList.innerHTML =
-        '<div class="pages-help">View-only mode: this PDF can be previewed, but this dependency-free writer cannot save edits for this format.</div>';
+        '<div class="pages-help">View-only mode: this PDF can be previewed, but the local writer cannot save edits for this file.</div>';
       textList.innerHTML = "";
     } else {
       renderPageList();
@@ -763,7 +810,7 @@
         const activeLabel = page.deleted
           ? "deleted"
           : `output #${activeIndexMap.get(id) || "-"}`;
-        const rotateTotal = normalizeRotation(page.effectiveRotate + page.rotateDelta);
+        const rotateTotal = normalizeRotation(page.baseRotate + page.rotateDelta);
         const scalePercent = Math.round(page.scale * 100);
 
         return `
@@ -1066,6 +1113,184 @@
       state.annotationsByPage.set(pageId, { strokes: [], texts: [] });
     }
     return state.annotationsByPage.get(pageId);
+  }
+
+  async function buildEditedPdfWithPdfLib() {
+    if (!state.canEdit || !state.sourceBytes) {
+      throw new Error("No editable PDF loaded.");
+    }
+    if (!state.pdfLibReady) {
+      throw new Error("Local PDF editing engine is unavailable.");
+    }
+    const activeIds = getActivePageIds();
+    if (!activeIds.length) {
+      throw new Error("No pages left to save.");
+    }
+
+    const pdfDoc = await window.PDFLib.PDFDocument.load(state.sourceBytes, {
+      updateMetadata: false,
+    });
+    const outputDoc = await window.PDFLib.PDFDocument.create();
+
+    const sourceIndices = [];
+    const models = [];
+    for (const pageId of activeIds) {
+      const model = state.pagesById.get(pageId);
+      if (!model) {
+        continue;
+      }
+      sourceIndices.push(Math.max(0, model.sourcePageNumber - 1));
+      models.push(model);
+    }
+    if (!sourceIndices.length) {
+      throw new Error("No valid pages to save.");
+    }
+
+    const copiedPages = await outputDoc.copyPages(pdfDoc, sourceIndices);
+    for (let i = 0; i < copiedPages.length; i += 1) {
+      const page = copiedPages[i];
+      const model = models[i];
+      if (!model) {
+        continue;
+      }
+
+      const baseRotation = normalizeRotation(page.getRotation().angle || model.baseRotate || 0);
+      const targetRotation = normalizeRotation(baseRotation + model.rotateDelta);
+      const scale = Math.max(0.25, Math.min(2, model.scale || 1));
+
+      if (Math.abs(scale - 1) > 0.0001) {
+        const originalWidth = page.getWidth();
+        const originalHeight = page.getHeight();
+        if (typeof page.scaleContent === "function") {
+          page.scaleContent(scale, scale);
+        }
+        if (typeof page.scaleAnnotations === "function") {
+          page.scaleAnnotations(scale, scale);
+        }
+        page.setSize(originalWidth * scale, originalHeight * scale);
+      }
+
+      applyOverlayMarksToPage(page, model.id, targetRotation);
+      page.setRotation(window.PDFLib.degrees(targetRotation));
+      outputDoc.addPage(page);
+    }
+
+    return outputDoc.save();
+  }
+
+  function applyOverlayMarksToPage(page, pageId, targetRotation) {
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks) {
+      return;
+    }
+    const pageWidth = page.getWidth();
+    const pageHeight = page.getHeight();
+    const displaySize = getDisplaySizeForRotation(pageWidth, pageHeight, targetRotation);
+
+    if (marks.strokes && marks.strokes.length) {
+      for (const stroke of marks.strokes) {
+        if (!stroke || !stroke.points || stroke.points.length < 2) {
+          continue;
+        }
+        const rgb = hexToRgb01(stroke.color);
+        const thickness = Math.max(0.5, stroke.widthNorm * displaySize.width);
+        for (let i = 1; i < stroke.points.length; i += 1) {
+          const prev = stroke.points[i - 1];
+          const next = stroke.points[i];
+          const start = mapPreviewNormPointToPdfPoint(
+            prev.x,
+            prev.y,
+            pageWidth,
+            pageHeight,
+            targetRotation
+          );
+          const end = mapPreviewNormPointToPdfPoint(
+            next.x,
+            next.y,
+            pageWidth,
+            pageHeight,
+            targetRotation
+          );
+          page.drawLine({
+            start,
+            end,
+            thickness,
+            color: window.PDFLib.rgb(rgb.r, rgb.g, rgb.b),
+            opacity: 1,
+          });
+        }
+      }
+    }
+
+    if (marks.texts && marks.texts.length) {
+      for (const textItem of marks.texts) {
+        const text = String((textItem && textItem.text) || "");
+        if (!text.trim()) {
+          continue;
+        }
+        const rgb = hexToRgb01(textItem.color);
+        const fontSize = Math.max(6, (textItem.sizeNorm || 0.02) * displaySize.height);
+        const maxWidth = Math.max(
+          16,
+          (textItem.widthNorm || 0.2) * displaySize.width
+        );
+        const point = mapPreviewNormPointToPdfPoint(
+          textItem.x || 0,
+          textItem.y || 0,
+          pageWidth,
+          pageHeight,
+          targetRotation
+        );
+        page.drawText(text, {
+          x: point.x,
+          y: point.y - fontSize,
+          size: fontSize,
+          maxWidth,
+          lineHeight: fontSize * 1.2,
+          color: window.PDFLib.rgb(rgb.r, rgb.g, rgb.b),
+        });
+      }
+    }
+  }
+
+  function getDisplaySizeForRotation(pageWidth, pageHeight, rotation) {
+    const normalizedRotation = normalizeRotation(rotation);
+    if (normalizedRotation === 90 || normalizedRotation === 270) {
+      return { width: pageHeight, height: pageWidth };
+    }
+    return { width: pageWidth, height: pageHeight };
+  }
+
+  function mapPreviewNormPointToPdfPoint(normX, normY, pageWidth, pageHeight, rotation) {
+    const safeX = Math.max(0, Math.min(1, Number(normX) || 0));
+    const safeY = Math.max(0, Math.min(1, Number(normY) || 0));
+    const display = getDisplaySizeForRotation(pageWidth, pageHeight, rotation);
+    const dx = safeX * display.width;
+    const dy = safeY * display.height;
+    const normalizedRotation = normalizeRotation(rotation);
+
+    if (normalizedRotation === 90) {
+      return {
+        x: dy,
+        y: dx,
+      };
+    }
+    if (normalizedRotation === 180) {
+      return {
+        x: pageWidth - dx,
+        y: dy,
+      };
+    }
+    if (normalizedRotation === 270) {
+      return {
+        x: pageWidth - dy,
+        y: pageHeight - dx,
+      };
+    }
+    return {
+      x: dx,
+      y: pageHeight - dy,
+    };
   }
 
   function buildEditedPdf(includeAnnotations) {
