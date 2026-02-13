@@ -3,6 +3,7 @@
 
   const fileInput = document.getElementById("fileInput");
   const saveBtn = document.getElementById("saveBtn");
+  const openExternalBtn = document.getElementById("openExternalBtn");
   const prevPageBtn = document.getElementById("prevPageBtn");
   const nextPageBtn = document.getElementById("nextPageBtn");
   const modeSelect = document.getElementById("modeSelect");
@@ -25,6 +26,9 @@
     fileName: "",
     sourceBytes: null,
     sourceUrl: "",
+    sourceFrameUrl: "",
+    sourceFrameMode: "",
+    currentFrameSrc: "",
     previewBytes: null,
     previewUrl: "",
     parsed: null,
@@ -47,6 +51,7 @@
   function bindEvents() {
     fileInput.addEventListener("change", onFileSelected);
     saveBtn.addEventListener("click", onSaveClick);
+    openExternalBtn.addEventListener("click", onOpenExternalClick);
     prevPageBtn.addEventListener("click", () => {
       setCurrentPageActiveIndex(state.currentPageActiveIndex - 1);
       renderEverything();
@@ -96,8 +101,10 @@
         state.sourceUrl = URL.createObjectURL(
           new Blob([bytes], { type: "application/pdf" })
         );
-
-        pdfFrame.src = state.sourceUrl;
+        const frameChoice = buildPreferredFrameUrl(bytes, state.sourceUrl);
+        state.sourceFrameUrl = frameChoice.url;
+        state.sourceFrameMode = frameChoice.mode;
+        state.currentFrameSrc = "";
 
         let parsed = null;
         try {
@@ -106,7 +113,7 @@
           state.canEdit = false;
           state.parsed = null;
           setStatus(
-            "Loaded in view-only mode. Editing requires a non-encrypted PDF with classic xref tables.",
+            "Loaded in view-only mode. If preview stays blank in mobile/webview, tap 'Open In Browser'.",
             "error"
           );
           renderEverything();
@@ -116,9 +123,8 @@
         state.canEdit = true;
         state.parsed = parsed;
         initializePageModels(parsed);
-        rebuildEditedPreview(false);
         setStatus(
-          "PDF loaded. You can reorder pages, rotate/scale/delete, draw, add/edit text, and save.",
+          "PDF loaded. You can reorder pages, rotate/scale/delete, draw, add/edit text, and save. If preview is blank on mobile/webview, tap 'Open In Browser'.",
           "ok"
         );
         renderEverything();
@@ -142,7 +148,6 @@
     }
     try {
       const bytes = buildEditedPdf(true);
-      updatePreviewBlob(bytes);
       const downloadName = buildOutputFileName(state.fileName);
       downloadBytes(bytes, downloadName);
       setStatus(`Saved ${downloadName}`, "ok");
@@ -151,6 +156,10 @@
       console.error(error);
       setStatus(error.message || "Save failed.", "error");
     }
+  }
+
+  function onOpenExternalClick() {
+    openPdfExternally();
   }
 
   function clearCurrentPageMarks() {
@@ -238,21 +247,18 @@
       state.pageOrder[toIndex] = state.pageOrder[fromIndex];
       state.pageOrder[fromIndex] = temp;
       normalizeCurrentPageIndex();
-      rebuildEditedPreview(false);
       renderEverything();
       return;
     }
 
     if (action === "rotate-left") {
       page.rotateDelta = normalizeRotation(page.rotateDelta - 90);
-      rebuildEditedPreview(false);
       renderEverything();
       return;
     }
 
     if (action === "rotate-right") {
       page.rotateDelta = normalizeRotation(page.rotateDelta + 90);
-      rebuildEditedPreview(false);
       renderEverything();
       return;
     }
@@ -264,7 +270,6 @@
       }
       page.deleted = !page.deleted;
       normalizeCurrentPageIndex();
-      rebuildEditedPreview(false);
       renderEverything();
       return;
     }
@@ -282,7 +287,6 @@
     }
     const scalePercent = Number(scaleInput.value);
     page.scale = Math.max(0.25, Math.min(2, scalePercent / 100));
-    rebuildEditedPreview(false);
     renderEverything();
   }
 
@@ -460,6 +464,7 @@
       const id = `${page.ref.num}_${page.ref.gen}_${i + 1}`;
       const model = {
         id,
+        sourcePageNumber: i + 1,
         ref: page.ref,
         dictEntries: page.dictEntries,
         effectiveMediaBox: page.effectiveMediaBox,
@@ -514,6 +519,9 @@
     state.fileName = "";
     state.sourceBytes = null;
     state.sourceUrl = "";
+    state.sourceFrameUrl = "";
+    state.sourceFrameMode = "";
+    state.currentFrameSrc = "";
     state.previewBytes = null;
     state.previewUrl = "";
     state.parsed = null;
@@ -531,6 +539,7 @@
   function renderEverything() {
     const editable = state.canEdit && !!state.parsed;
     saveBtn.disabled = !editable;
+    openExternalBtn.disabled = !state.sourceUrl;
     prevPageBtn.disabled = !editable || state.currentPageActiveIndex <= 0;
     nextPageBtn.disabled =
       !editable || state.currentPageActiveIndex >= getActivePageIds().length - 1;
@@ -555,7 +564,7 @@
       pageList.innerHTML =
         '<div class="pages-help">This file can be viewed but not edited by this dependency-free editor.</div>';
       textList.innerHTML = "";
-      pdfFrame.src = state.sourceUrl;
+      updatePdfFrameSource();
       updateOverlayInteractivity();
       drawOverlay();
       return;
@@ -577,7 +586,13 @@
       return;
     }
     const pageNumber = state.currentPageActiveIndex + 1;
-    pageIndicator.textContent = `Page ${pageNumber} / ${active.length}`;
+    const currentId = getCurrentPageId();
+    const page = currentId ? state.pagesById.get(currentId) : null;
+    if (page) {
+      pageIndicator.textContent = `Output page ${pageNumber} / ${active.length} (source page ${page.sourcePageNumber})`;
+      return;
+    }
+    pageIndicator.textContent = `Output page ${pageNumber} / ${active.length}`;
   }
 
   function renderPageList() {
@@ -612,7 +627,7 @@
         return `
           <article class="${classes.join(" ")}">
             <div class="page-row-head">
-              <strong>Source page ${orderIndex + 1}</strong>
+              <strong>Source page ${page.sourcePageNumber}</strong>
               <span class="page-row-meta">${activeLabel}</span>
             </div>
             <div class="page-row-meta">rotate: ${rotateTotal}° | scale: ${scalePercent}%</div>
@@ -684,16 +699,35 @@
   }
 
   function updatePdfFrameSource() {
+    if (!state.canEdit || !state.parsed) {
+      const baseUrl = state.sourceFrameUrl || state.sourceUrl;
+      if (!baseUrl) {
+        pdfFrame.removeAttribute("src");
+        state.currentFrameSrc = "";
+        return;
+      }
+      const nextSrc = `${baseUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
+      if (state.currentFrameSrc !== nextSrc) {
+        pdfFrame.src = nextSrc;
+        state.currentFrameSrc = nextSrc;
+      }
+      return;
+    }
+
     const activeCount = getActivePageIds().length;
     if (!activeCount) {
       pdfFrame.removeAttribute("src");
+      state.currentFrameSrc = "";
       return;
     }
-    const baseUrl = state.previewUrl || state.sourceUrl;
-    const page = state.currentPageActiveIndex + 1;
+    const baseUrl = state.sourceFrameUrl || state.sourceUrl;
+    const currentId = getCurrentPageId();
+    const model = currentId ? state.pagesById.get(currentId) : null;
+    const page = model ? model.sourcePageNumber : state.currentPageActiveIndex + 1;
     const nextSrc = `${baseUrl}#page=${page}&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
-    if (pdfFrame.src !== nextSrc) {
+    if (state.currentFrameSrc !== nextSrc) {
       pdfFrame.src = nextSrc;
+      state.currentFrameSrc = nextSrc;
     }
   }
 
@@ -1808,6 +1842,43 @@
       out += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
     }
     return out;
+  }
+
+  function buildPreferredFrameUrl(bytes, blobUrl) {
+    if (!bytes || !bytes.length || !blobUrl) {
+      return { url: blobUrl || "", mode: "blob-url" };
+    }
+    try {
+      // Mobile/webview engines are often more reliable with data URLs than blob URLs.
+      if (bytes.length <= 6 * 1024 * 1024) {
+        return {
+          url: bytesToPdfDataUrl(bytes),
+          mode: "data-url",
+        };
+      }
+    } catch (error) {
+      console.warn("Falling back to blob preview URL", error);
+    }
+    return { url: blobUrl, mode: "blob-url" };
+  }
+
+  function bytesToPdfDataUrl(bytes) {
+    const binary = bytesToLatin1(bytes);
+    return `data:application/pdf;base64,${btoa(binary)}`;
+  }
+
+  function openPdfExternally() {
+    const openUrl = state.sourceFrameUrl || state.sourceUrl;
+    if (!openUrl) {
+      setStatus("Load a PDF first.", "error");
+      return;
+    }
+    const popup = window.open(openUrl, "_blank", "noopener,noreferrer");
+    if (popup) {
+      return;
+    }
+    // Fallback for restricted webviews where popups are blocked.
+    window.location.href = openUrl;
   }
 
   function downloadBytes(bytes, fileName) {

@@ -14,6 +14,7 @@
         <span>Open PDF</span>
         <input id="fileInput" type="file" accept="application/pdf">
       </label>
+      <button id="openExternalBtn" type="button" disabled>Open In Browser</button>
       <button id="saveBtn" type="button" disabled>Save PDF</button>
     </div>
   </header>
@@ -48,6 +49,9 @@
         ></iframe>
         <canvas id="overlayCanvas"></canvas>
       </div>
+      <p class="viewer-help">
+        If embedded preview is blank in SPCK/mobile webviews, tap <strong>Open In Browser</strong>.
+      </p>
 
       <div class="text-editor-block">
         <button id="addCenteredTextBtn" type="button" disabled>Add Centered Text</button>

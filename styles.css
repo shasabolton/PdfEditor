@@ -152,6 +152,12 @@ button:not(:disabled),
   pointer-events: none;
 }
 
+.viewer-help {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
 .text-editor-block {
   border: 1px solid var(--border);
   border-radius: 0.6rem;

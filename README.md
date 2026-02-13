@@ -33,7 +33,8 @@ The editor is intended to support this workflow:
 ### File + viewing
 
 - Open local PDF with file picker.
-- PDF displays in embedded browser PDF viewer.
+- PDF displays in embedded browser PDF viewer when supported.
+- Includes **Open In Browser** button for SPCK/mobile webview compatibility.
 - Page-by-page navigation (`Prev` / `Next`).
 
 ### Page operations
@@ -42,6 +43,7 @@ The editor is intended to support this workflow:
 - **Rotate:** per-page `-90` / `+90`.
 - **Resize:** per-page scale slider (`25%` to `200%`).
 - **Delete/restore:** toggle page inclusion in output.
+- Structural edits are always applied in saved output PDF.
 
 ### Drawing + text
 
@@ -64,6 +66,7 @@ Because this is a strict no-dependency vanilla implementation:
 
 - Editing works best on **non-encrypted PDFs using classic xref tables**.
 - Some PDFs (especially xref streams/object streams/encrypted PDFs) may open in **view-only mode**.
+- Some mobile/webview environments cannot render embedded PDFs reliably; use **Open In Browser** in that case.
 - Existing complex annotation structures may not always be fully preserved.
 - Draw/text placement is annotation-based and may vary slightly across PDF viewers.
 
