@@ -40,6 +40,7 @@
     },
     parsed: null,
     canEdit: false,
+    editMode: "",
     pageOrder: [],
     pagesById: new Map(),
     annotationsByPage: new Map(),
@@ -148,29 +149,45 @@
         }
 
         const editableInit = await initializeEditableModels(bytes);
+        let activeInit = editableInit;
         if (!editableInit.ok) {
-          state.canEdit = false;
-          state.parsed = null;
-          setStatus(
-            editableInit.reason ||
-              "Loaded in view-only mode. Save is disabled for this PDF.",
-            "error"
-          );
-          renderEverything();
-          return;
+          const rasterInit = await initializeRasterFallbackModels();
+          if (rasterInit.ok) {
+            activeInit = rasterInit;
+          } else {
+            state.canEdit = false;
+            state.editMode = "";
+            state.parsed = null;
+            setStatus(
+              rasterInit.reason ||
+                editableInit.reason ||
+                "Loaded in view-only mode. Save is disabled for this PDF.",
+              "error"
+            );
+            renderEverything();
+            return;
+          }
         }
 
         state.canEdit = true;
+        state.editMode = activeInit.mode || "pdf-lib";
         state.parsed = {
-          pageCount: editableInit.pages.length,
+          pageCount: activeInit.pages.length,
         };
-        initializePageModels(editableInit.pages);
+        initializePageModels(activeInit.pages);
         state.currentPageActiveIndex = 0;
         if (state.previewDoc) {
-          setStatus(
-            "PDF loaded. Live preview uses in-app canvas rendering (no browser PDF plugin needed).",
-            "ok"
-          );
+          if (state.editMode === "raster-fallback") {
+            setStatus(
+              "PDF loaded in compatibility edit mode. Save works, but output pages are rasterized.",
+              "ok"
+            );
+          } else {
+            setStatus(
+              "PDF loaded. Live preview uses in-app canvas rendering (no browser PDF plugin needed).",
+              "ok"
+            );
+          }
         } else {
           setStatus(
             "PDF loaded, but preview renderer is unavailable in this environment. Use Open In Browser for visual reference.",
@@ -195,12 +212,15 @@
     if (!state.pdfLibReady) {
       return {
         ok: false,
+        mode: "",
         reason: "Loaded in view-only mode. The local PDF editing engine is unavailable.",
       };
     }
     try {
       const pdfDoc = await window.PDFLib.PDFDocument.load(bytes, {
         updateMetadata: false,
+        throwOnInvalidObject: false,
+        ignoreEncryption: true,
       });
       const pages = pdfDoc.getPages().map((page, index) => ({
         sourcePageNumber: index + 1,
@@ -209,27 +229,64 @@
       if (!pages.length) {
         return {
           ok: false,
+          mode: "",
           reason: "Loaded in view-only mode. This PDF has no readable pages.",
         };
       }
       return {
         ok: true,
+        mode: "pdf-lib",
         pages,
       };
     } catch (error) {
       return {
         ok: false,
+        mode: "",
         reason: getEditableLoadErrorMessage(error),
       };
     }
   }
 
+  async function initializeRasterFallbackModels() {
+    if (!state.previewDoc || !Number.isFinite(state.previewDoc.numPages)) {
+      return {
+        ok: false,
+        mode: "",
+        reason:
+          "Loaded in view-only mode. PDF writer parse failed and raster fallback is unavailable.",
+      };
+    }
+    const pages = [];
+    for (let pageNumber = 1; pageNumber <= state.previewDoc.numPages; pageNumber += 1) {
+      let baseRotate = 0;
+      try {
+        const sourcePage = await state.previewDoc.getPage(pageNumber);
+        baseRotate = normalizeRotation(sourcePage.rotate || 0);
+      } catch (error) {
+        baseRotate = 0;
+      }
+      pages.push({
+        sourcePageNumber: pageNumber,
+        baseRotate,
+      });
+    }
+    return {
+      ok: true,
+      mode: "raster-fallback",
+      pages,
+    };
+  }
+
   function getEditableLoadErrorMessage(error) {
-    const message = String((error && error.message) || "").toLowerCase();
-    if (message.includes("encrypted")) {
+    const rawMessage = String((error && error.message) || "");
+    const message = rawMessage.toLowerCase();
+    if (message.includes("encrypted") || message.includes("password")) {
       return "Loaded in view-only mode. This PDF is encrypted/password-protected.";
     }
-    return "Loaded in view-only mode. This PDF format cannot be edited by the local writer.";
+    return (
+      "Loaded in view-only mode. Direct writer parse failed; trying compatibility mode. " +
+      (rawMessage ? `Details: ${rawMessage.slice(0, 140)}` : "")
+    ).trim();
   }
 
   async function onSaveClick() {
@@ -238,10 +295,29 @@
       return;
     }
     try {
-      const bytes = await buildEditedPdfWithPdfLib();
+      let bytes;
+      if (state.editMode === "raster-fallback") {
+        bytes = await buildEditedPdfFromRasterPreview();
+      } else {
+        try {
+          bytes = await buildEditedPdfWithPdfLib();
+        } catch (directSaveError) {
+          if (!state.previewDoc) {
+            throw directSaveError;
+          }
+          bytes = await buildEditedPdfFromRasterPreview();
+          state.editMode = "raster-fallback";
+          setStatus(
+            "Direct save failed; used compatibility raster save mode for this file.",
+            "error"
+          );
+        }
+      }
       const downloadName = buildOutputFileName(state.fileName);
       downloadBytes(bytes, downloadName);
-      setStatus(`Saved ${downloadName}`, "ok");
+      const saveModeLabel =
+        state.editMode === "raster-fallback" ? " (compatibility mode)" : "";
+      setStatus(`Saved ${downloadName}${saveModeLabel}`, "ok");
       renderEverything();
     } catch (error) {
       console.error(error);
@@ -609,6 +685,7 @@
     state.previewDoc = null;
     state.parsed = null;
     state.canEdit = false;
+    state.editMode = "";
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
@@ -1173,6 +1250,69 @@
       applyOverlayMarksToPage(page, model.id, targetRotation);
       page.setRotation(window.PDFLib.degrees(targetRotation));
       outputDoc.addPage(page);
+    }
+
+    return outputDoc.save();
+  }
+
+  async function buildEditedPdfFromRasterPreview() {
+    if (!state.previewDoc) {
+      throw new Error("Preview document is unavailable for raster save mode.");
+    }
+    if (!state.pdfLibReady) {
+      throw new Error("Local PDF editing engine is unavailable.");
+    }
+
+    const activeIds = getActivePageIds();
+    if (!activeIds.length) {
+      throw new Error("No pages left to save.");
+    }
+
+    const outputDoc = await window.PDFLib.PDFDocument.create();
+
+    for (const pageId of activeIds) {
+      const model = state.pagesById.get(pageId);
+      if (!model) {
+        continue;
+      }
+      const sourcePage = await state.previewDoc.getPage(model.sourcePageNumber);
+      const sourceRotation = normalizeRotation(sourcePage.rotate || 0);
+      const targetRotation = normalizeRotation(sourceRotation + model.rotateDelta);
+      const scale = Math.max(0.25, Math.min(2, model.scale || 1));
+      const baseViewport = sourcePage.getViewport({ scale: 1, rotation: targetRotation });
+      const outputWidth = Math.max(1, baseViewport.width * scale);
+      const outputHeight = Math.max(1, baseViewport.height * scale);
+
+      const renderScale = Math.max(1, Math.min(2, 1800 / Math.max(outputWidth, outputHeight)));
+      const renderViewport = sourcePage.getViewport({
+        scale: renderScale * scale,
+        rotation: targetRotation,
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.floor(renderViewport.width));
+      canvas.height = Math.max(1, Math.floor(renderViewport.height));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const renderTask = sourcePage.render({
+        canvasContext: ctx,
+        viewport: renderViewport,
+      });
+      await renderTask.promise;
+
+      const pngDataUrl = canvas.toDataURL("image/png");
+      const image = await outputDoc.embedPng(pngDataUrl);
+      const outPage = outputDoc.addPage([outputWidth, outputHeight]);
+      outPage.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: outputWidth,
+        height: outputHeight,
+      });
+
+      applyOverlayMarksToPage(outPage, model.id, 0);
     }
 
     return outputDoc.save();

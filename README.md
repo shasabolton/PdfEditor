@@ -58,6 +58,7 @@ The editor is intended to support this workflow:
 
 - Save exports a new `*-edited.pdf`.
 - Output PDF generation is done entirely in-browser using a local PDF editing library (no server).
+- If direct structural editing is not possible, app falls back to **compatibility raster mode** so editing/saving still works.
 
 ---
 
@@ -68,6 +69,7 @@ Because this is a strict client-side static implementation (with locally bundled
 - Most standard PDFs are editable, including many modern xref/object-stream files.
 - Encrypted/password-protected PDFs can still open for preview but may remain **view-only**.
 - Extremely large/corrupt PDFs may fail preview and should be opened with **Open In Browser** fallback.
+- Compatibility raster mode flattens original page content into images before saving (text is no longer selectable in flattened page layers).
 - Existing complex annotation structures may not always be fully preserved.
 - Draw/text placement is annotation-based and may vary slightly across PDF viewers.
 
