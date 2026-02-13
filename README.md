@@ -59,6 +59,7 @@ The editor is intended to support this workflow:
 - Save exports a new `*-edited.pdf`.
 - Output PDF generation is done entirely in-browser using a local PDF editing library (no server).
 - If direct structural editing is not possible, app falls back to **compatibility raster mode** so editing/saving still works.
+- After save, app shows a persistent **Download Saved PDF** link/button fallback for mobile/webview environments that block automatic downloads.
 
 ---
 

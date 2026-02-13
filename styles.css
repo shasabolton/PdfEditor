@@ -206,6 +206,27 @@ button:not(:disabled),
   color: var(--danger);
 }
 
+.download-fallback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--panel-soft);
+}
+
+.download-fallback.hidden {
+  display: none;
+}
+
+.download-fallback a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--accent);
+}
+
 .pages-section {
   display: flex;
   flex-direction: column;

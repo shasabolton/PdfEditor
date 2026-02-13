@@ -13,6 +13,9 @@
   const addCenteredTextBtn = document.getElementById("addCenteredTextBtn");
   const pageIndicator = document.getElementById("pageIndicator");
   const statusText = document.getElementById("statusText");
+  const downloadFallback = document.getElementById("downloadFallback");
+  const downloadFallbackLink = document.getElementById("downloadFallbackLink");
+  const openSavedBtn = document.getElementById("openSavedBtn");
   const pageList = document.getElementById("pageList");
   const textList = document.getElementById("textList");
   const viewerContainer = document.getElementById("viewerContainer");
@@ -41,6 +44,8 @@
     parsed: null,
     canEdit: false,
     editMode: "",
+    lastSavedUrl: "",
+    lastSavedName: "",
     pageOrder: [],
     pagesById: new Map(),
     annotationsByPage: new Map(),
@@ -62,6 +67,7 @@
     fileInput.addEventListener("change", onFileSelected);
     saveBtn.addEventListener("click", onSaveClick);
     openExternalBtn.addEventListener("click", onOpenExternalClick);
+    openSavedBtn.addEventListener("click", onOpenSavedClick);
     prevPageBtn.addEventListener("click", () => {
       setCurrentPageActiveIndex(state.currentPageActiveIndex - 1);
       renderEverything();
@@ -295,6 +301,7 @@
       return;
     }
     try {
+      setStatus("Preparing saved PDF...", "ok");
       let bytes;
       if (state.editMode === "raster-fallback") {
         bytes = await buildEditedPdfFromRasterPreview();
@@ -314,10 +321,16 @@
         }
       }
       const downloadName = buildOutputFileName(state.fileName);
-      downloadBytes(bytes, downloadName);
+      const delivery = await deliverSavedPdf(bytes, downloadName);
       const saveModeLabel =
         state.editMode === "raster-fallback" ? " (compatibility mode)" : "";
-      setStatus(`Saved ${downloadName}${saveModeLabel}`, "ok");
+      const deliveryLabel =
+        delivery.method === "share"
+          ? " via share sheet."
+          : delivery.method === "download"
+            ? "."
+            : ". If download did not start automatically, use Download Saved PDF.";
+      setStatus(`Saved ${downloadName}${saveModeLabel}${deliveryLabel}`, "ok");
       renderEverything();
     } catch (error) {
       console.error(error);
@@ -327,6 +340,10 @@
 
   function onOpenExternalClick() {
     openPdfExternally();
+  }
+
+  function onOpenSavedClick() {
+    openSavedPdf();
   }
 
   function clearCurrentPageMarks() {
@@ -679,6 +696,7 @@
     if (state.sourceUrl) {
       URL.revokeObjectURL(state.sourceUrl);
     }
+    clearSavedDownload();
     state.fileName = "";
     state.sourceBytes = null;
     state.sourceUrl = "";
@@ -707,9 +725,11 @@
     const editable = state.canEdit && !!state.parsed;
     const previewCount = getPreviewPageCount();
     normalizeCurrentPageIndex();
+    updateSavedDownloadUI();
 
     saveBtn.disabled = !editable;
     openExternalBtn.disabled = !state.sourceUrl;
+    openSavedBtn.disabled = !state.lastSavedUrl;
     prevPageBtn.disabled = previewCount < 2 || state.currentPageActiveIndex <= 0;
     nextPageBtn.disabled =
       previewCount < 2 || state.currentPageActiveIndex >= previewCount - 1;
@@ -2416,16 +2436,114 @@
     window.location.href = openUrl;
   }
 
-  function downloadBytes(bytes, fileName) {
+  async function deliverSavedPdf(bytes, fileName) {
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setSavedDownload(url, fileName);
+
+    const shared = await tryShareSavedPdf(blob, fileName);
+    if (shared) {
+      return { method: "share" };
+    }
+
+    const triggered = triggerDownloadLink(url, fileName);
+    if (triggered) {
+      return { method: "download" };
+    }
+    return { method: "manual" };
+  }
+
+  async function tryShareSavedPdf(blob, fileName) {
+    if (!navigator.share || typeof File === "undefined") {
+      return false;
+    }
+    try {
+      const file = new File([blob], fileName, { type: "application/pdf" });
+      if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+        return false;
+      }
+      await navigator.share({
+        files: [file],
+        title: fileName,
+        text: "Saved PDF",
+      });
+      return true;
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        return false;
+      }
+      console.warn("Share API unavailable for this file.", error);
+      return false;
+    }
+  }
+
+  function triggerDownloadLink(url, fileName) {
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    } catch (error) {
+      console.warn("Automatic download trigger failed.", error);
+      return false;
+    }
+  }
+
+  function setSavedDownload(url, fileName) {
+    if (state.lastSavedUrl && state.lastSavedUrl !== url) {
+      URL.revokeObjectURL(state.lastSavedUrl);
+    }
+    state.lastSavedUrl = url;
+    state.lastSavedName = fileName || "saved.pdf";
+    updateSavedDownloadUI();
+  }
+
+  function clearSavedDownload() {
+    if (state.lastSavedUrl) {
+      URL.revokeObjectURL(state.lastSavedUrl);
+    }
+    state.lastSavedUrl = "";
+    state.lastSavedName = "";
+    updateSavedDownloadUI();
+  }
+
+  function updateSavedDownloadUI() {
+    const hasSaved = !!state.lastSavedUrl;
+    if (downloadFallback) {
+      downloadFallback.classList.toggle("hidden", !hasSaved);
+    }
+    if (downloadFallbackLink) {
+      if (hasSaved) {
+        downloadFallbackLink.href = state.lastSavedUrl;
+        downloadFallbackLink.download = state.lastSavedName || "saved.pdf";
+        downloadFallbackLink.textContent = `Download Saved PDF (${state.lastSavedName})`;
+      } else {
+        downloadFallbackLink.removeAttribute("href");
+        downloadFallbackLink.removeAttribute("download");
+        downloadFallbackLink.textContent = "Download Saved PDF";
+      }
+    }
+    if (openSavedBtn) {
+      openSavedBtn.disabled = !hasSaved;
+    }
+  }
+
+  function openSavedPdf() {
+    if (!state.lastSavedUrl) {
+      setStatus("No saved PDF is available yet. Save first.", "error");
+      return;
+    }
+    const popup = window.open(state.lastSavedUrl, "_blank", "noopener,noreferrer");
+    if (popup) {
+      return;
+    }
+    // Fallback for restricted webviews where popups are blocked.
+    window.location.href = state.lastSavedUrl;
   }
 
   function buildOutputFileName(originalName) {
