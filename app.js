@@ -563,41 +563,61 @@
     if (!sourcePages.length) {
       throw new Error("No pages available for multi-page generation.");
     }
-    const embeddedPages = [];
+    const embeddedVariants = [];
     for (const sourcePage of sourcePages) {
       const embedded = await outputDoc.embedPage(sourcePage);
-      embeddedPages.push(embedded);
+      const rotated = await outputDoc.embedPage(
+        sourcePage,
+        undefined,
+        [0, 1, -1, 0, sourcePage.getHeight(), 0]
+      );
+      embeddedVariants.push({
+        normal: embedded,
+        rotated,
+      });
     }
 
-    const cols = Math.ceil(Math.sqrt(pagesPerSheet));
-    const rows = Math.ceil(pagesPerSheet / cols);
-    const margin = Math.max(8, Math.min(sheetSize.width, sheetSize.height) * 0.035);
-    const gutter = Math.max(4, margin * 0.45);
-    const cellWidth =
-      (sheetSize.width - margin * 2 - gutter * (cols - 1)) / cols;
-    const cellHeight =
-      (sheetSize.height - margin * 2 - gutter * (rows - 1)) / rows;
+    const gridCandidates = buildNupGridCandidates(pagesPerSheet);
+    const sheetCandidates = [
+      { width: sheetSize.width, height: sheetSize.height },
+      { width: sheetSize.height, height: sheetSize.width },
+    ];
 
-    for (let start = 0; start < embeddedPages.length; start += pagesPerSheet) {
-      const chunk = embeddedPages.slice(start, start + pagesPerSheet);
-      const sheet = outputDoc.addPage([sheetSize.width, sheetSize.height]);
+    for (let start = 0; start < embeddedVariants.length; start += pagesPerSheet) {
+      const chunk = embeddedVariants.slice(start, start + pagesPerSheet);
+      let bestPlan = null;
+      for (const sheetCandidate of sheetCandidates) {
+        for (const grid of gridCandidates) {
+          const plan = evaluateNupPlan(chunk, sheetCandidate, grid);
+          if (!plan) {
+            continue;
+          }
+          if (!bestPlan || plan.totalArea > bestPlan.totalArea) {
+            bestPlan = plan;
+          }
+        }
+      }
+      if (!bestPlan) {
+        throw new Error("Unable to generate layout for selected pages per sheet.");
+      }
+
+      const sheet = outputDoc.addPage([bestPlan.sheetWidth, bestPlan.sheetHeight]);
       for (let i = 0; i < chunk.length; i += 1) {
-        const embeddedPage = chunk[i];
-        const row = Math.floor(i / cols);
-        const col = i % cols;
-        const xCell = margin + col * (cellWidth + gutter);
-        const yTop = sheetSize.height - margin - row * (cellHeight + gutter);
-        const sourceWidth = embeddedPage.width;
-        const sourceHeight = embeddedPage.height;
-        const scale = Math.min(
-          cellWidth / Math.max(1, sourceWidth),
-          cellHeight / Math.max(1, sourceHeight)
-        );
-        const drawWidth = sourceWidth * scale;
-        const drawHeight = sourceHeight * scale;
-        const x = xCell + (cellWidth - drawWidth) / 2;
-        const y = yTop - cellHeight + (cellHeight - drawHeight) / 2;
-        sheet.drawPage(embeddedPage, {
+        const placement = bestPlan.placements[i];
+        const row = Math.floor(i / bestPlan.cols);
+        const col = i % bestPlan.cols;
+        const xCell = bestPlan.margin + col * (bestPlan.cellWidth + bestPlan.gutter);
+        const yTop =
+          bestPlan.sheetHeight -
+          bestPlan.margin -
+          row * (bestPlan.cellHeight + bestPlan.gutter);
+
+        const drawWidth = placement.page.width * placement.scale;
+        const drawHeight = placement.page.height * placement.scale;
+        const x = xCell + (bestPlan.cellWidth - drawWidth) / 2;
+        const y = yTop - bestPlan.cellHeight + (bestPlan.cellHeight - drawHeight) / 2;
+
+        sheet.drawPage(placement.page, {
           x,
           y,
           width: drawWidth,
@@ -606,6 +626,79 @@
       }
     }
     return outputDoc.save();
+  }
+
+  function buildNupGridCandidates(pagesPerSheet) {
+    const candidates = [];
+    for (let rows = 1; rows <= pagesPerSheet; rows += 1) {
+      for (let cols = 1; cols <= pagesPerSheet; cols += 1) {
+        if (rows * cols < pagesPerSheet) {
+          continue;
+        }
+        candidates.push({ rows, cols });
+      }
+    }
+    return candidates;
+  }
+
+  function evaluateNupPlan(chunk, sheetCandidate, grid) {
+    const sheetWidth = sheetCandidate.width;
+    const sheetHeight = sheetCandidate.height;
+    const margin = Math.max(8, Math.min(sheetWidth, sheetHeight) * 0.035);
+    const gutter = Math.max(4, margin * 0.45);
+    const cellWidth =
+      (sheetWidth - margin * 2 - gutter * (grid.cols - 1)) / grid.cols;
+    const cellHeight =
+      (sheetHeight - margin * 2 - gutter * (grid.rows - 1)) / grid.rows;
+    if (cellWidth <= 0 || cellHeight <= 0) {
+      return null;
+    }
+
+    let totalArea = 0;
+    const placements = [];
+
+    for (const variants of chunk) {
+      const normal = variants.normal;
+      const rotated = variants.rotated;
+      const scaleNormal = Math.min(
+        cellWidth / Math.max(1, normal.width),
+        cellHeight / Math.max(1, normal.height)
+      );
+      const areaNormal = normal.width * normal.height * scaleNormal * scaleNormal;
+
+      const scaleRotated = Math.min(
+        cellWidth / Math.max(1, rotated.width),
+        cellHeight / Math.max(1, rotated.height)
+      );
+      const areaRotated = rotated.width * rotated.height * scaleRotated * scaleRotated;
+
+      if (areaRotated > areaNormal) {
+        placements.push({
+          page: rotated,
+          scale: scaleRotated,
+        });
+        totalArea += areaRotated;
+      } else {
+        placements.push({
+          page: normal,
+          scale: scaleNormal,
+        });
+        totalArea += areaNormal;
+      }
+    }
+
+    return {
+      sheetWidth,
+      sheetHeight,
+      margin,
+      gutter,
+      rows: grid.rows,
+      cols: grid.cols,
+      cellWidth,
+      cellHeight,
+      placements,
+      totalArea,
+    };
   }
 
   function onOpenSavedClick() {
