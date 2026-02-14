@@ -33,9 +33,9 @@ The editor is intended to support this workflow:
 
 ### File + viewing
 
-- Open local PDF with file picker.
+- Open local PDF from **File** dropdown.
+- Save and Close are also in **File** dropdown.
 - PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
-- File actions are grouped in a **File** dropdown (`Open PDF`, `Save PDF`, `Close File`).
 - Vertical all-pages preview stack is rendered below the main viewer so you can scroll through pages.
 
 ### Page operations
@@ -47,7 +47,7 @@ The editor is intended to support this workflow:
 - **Resize:** selected page `Scale-` / `Scale+` controls (`25%` to `200%`).
 - **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
-- **Merge file:** in Pages mode, merge another PDF before or after current page (prompted).
+- **Merge file:** click `Merge File` in Pages mode, then choose `Before` or `After` (buttons appear only after clicking Merge File), then pick another PDF.
 - In any edit mode, the editable page window is shown **inline in place of that page card** (not in a separate top panel).
 - Active editable page is highlighted with a **red border**.
 - Structural edits are always applied in saved output PDF.
@@ -70,7 +70,8 @@ The editor is intended to support this workflow:
 ### Layout + navigation UX
 
 - Top controls are sticky so tools remain visible while scrolling.
-- Zoom can be set from the top zoom picker and adjusted via mouse wheel over the inline edit window.
+- Zoom can be set from the top zoom picker (`10%` to `500%`) and adjusted via mouse wheel over the inline edit window.
+- Pages and the active edit window can flow side-by-side when there is horizontal space, then wrap to next row.
 
 ---
 

@@ -44,6 +44,9 @@
     pageZoom: 1,
     toolColor: "#d02626",
     toolSize: 4,
+    mergePlacementPrompt: false,
+    mergeTargetPageId: "",
+    pendingMergePlacement: "",
     lastSavedUrl: "",
     lastSavedName: "",
     pageOrder: [],
@@ -76,7 +79,7 @@
     zoomSelect.addEventListener("change", () => {
       const zoom = Number(zoomSelect.value);
       if (Number.isFinite(zoom)) {
-        state.pageZoom = Math.max(0.5, Math.min(2.5, zoom));
+        state.pageZoom = Math.max(0.1, Math.min(5, zoom));
         renderEverything();
       }
     });
@@ -348,14 +351,20 @@
   async function onMergeFileSelected(event) {
     const file = event.target.files && event.target.files[0];
     mergeFileInput.value = "";
+    const placement = state.pendingMergePlacement;
+    state.pendingMergePlacement = "";
     if (!file) {
+      return;
+    }
+    if (!placement) {
+      setStatus("Choose Before or After first.", "error");
       return;
     }
     if (!state.canEdit || !state.parsed) {
       setStatus("Load an editable PDF before merging.", "error");
       return;
     }
-    const selectedPageId = getCurrentPageId();
+    const selectedPageId = state.mergeTargetPageId || getCurrentPageId();
     if (!selectedPageId) {
       setStatus("Select a page before merging.", "error");
       return;
@@ -366,17 +375,6 @@
       return;
     }
 
-    const answer = window
-      .prompt("Merge file before or after current page? Type: before / after", "after");
-    if (!answer) {
-      return;
-    }
-    const placement = answer.trim().toLowerCase();
-    if (placement !== "before" && placement !== "after") {
-      setStatus("Merge cancelled. Use exactly: before or after.", "error");
-      return;
-    }
-
     try {
       setStatus("Merging file...", "ok");
       const mergeBytes = new Uint8Array(await file.arrayBuffer());
@@ -384,6 +382,8 @@
       const merged = await mergePdfAtPosition(currentBytes, mergeBytes, placement, anchorIndex);
       const loaded = await loadDocumentFromBytes(merged.bytes, state.fileName || "document.pdf");
       if (!loaded) {
+        state.mergePlacementPrompt = false;
+        state.mergeTargetPageId = "";
         return;
       }
       const selectIndex =
@@ -394,6 +394,8 @@
       const activeIds = getActivePageIds();
       state.selectedPageId =
         activeIds[Math.max(0, Math.min(activeIds.length - 1, selectIndex))] || "";
+      state.mergePlacementPrompt = false;
+      state.mergeTargetPageId = "";
       renderEverything();
       setStatus(
         `Merged ${file.name} ${placement} current page (${merged.insertedCount} pages).`,
@@ -784,6 +786,9 @@
     state.selectedPageId = "";
     state.allPagesRenderToken += 1;
     state.pageZoom = 1;
+    state.mergePlacementPrompt = false;
+    state.mergeTargetPageId = "";
+    state.pendingMergePlacement = "";
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
@@ -808,6 +813,11 @@
     const editable = state.canEdit && !!state.parsed;
     if (!editable && state.mode !== "view") {
       state.mode = "view";
+    }
+    if (state.mode !== "pages") {
+      state.mergePlacementPrompt = false;
+      state.pendingMergePlacement = "";
+      state.mergeTargetPageId = "";
     }
     normalizeCurrentPageIndex();
     ensureSelectedPageId();
@@ -881,6 +891,8 @@
       const canMoveUp = !page.deleted && idx > 0;
       const canMoveDown = !page.deleted && idx >= 0 && idx < state.pageOrder.length - 1;
       const canDelete = page.deleted || getActivePageIds().length > 1;
+      const showMergeChoice =
+        state.mergePlacementPrompt && state.mergeTargetPageId === pageId && !page.deleted;
       modeToolPanel.innerHTML = `
         <div class="mode-tools-row">
           <strong>${page.deleted ? "Deleted page" : `Page ${outputIdx + 1}`}</strong>
@@ -906,6 +918,16 @@
         page.deleted ? "disabled" : ""
       }>Merge File</button>
         </div>
+        ${
+          showMergeChoice
+            ? `<div class="mode-tools-row">
+          <span class="pages-help">Insert merge file:</span>
+          <button type="button" data-action="merge-before" data-page-id="${pageId}">Before</button>
+          <button type="button" data-action="merge-after" data-page-id="${pageId}">After</button>
+          <button type="button" data-action="merge-cancel" data-page-id="${pageId}">Cancel</button>
+        </div>`
+            : ""
+        }
       `;
       return;
     }
@@ -964,15 +986,35 @@
       return;
     }
     const action = button.dataset.action || "";
+    const pageId = button.dataset.pageId || getCurrentPageId();
     if (action === "merge-file") {
       if (!state.canEdit || !state.parsed) {
         setStatus("Load an editable PDF before merging.", "error");
         return;
       }
-      if (!getCurrentPageId()) {
+      if (!pageId) {
         setStatus("Select a page before merging.", "error");
         return;
       }
+      state.mergeTargetPageId = pageId;
+      state.mergePlacementPrompt = true;
+      renderModeToolPanel();
+      return;
+    }
+    if (action === "merge-cancel") {
+      state.mergePlacementPrompt = false;
+      state.mergeTargetPageId = "";
+      state.pendingMergePlacement = "";
+      renderModeToolPanel();
+      return;
+    }
+    if (action === "merge-before" || action === "merge-after") {
+      if (!pageId) {
+        setStatus("Select a page before merging.", "error");
+        return;
+      }
+      state.mergeTargetPageId = pageId;
+      state.pendingMergePlacement = action === "merge-before" ? "before" : "after";
       mergeFileInput.click();
       return;
     }
@@ -1016,15 +1058,12 @@
 
   function applyWheelZoom(deltaY) {
     const direction = deltaY > 0 ? -1 : 1;
-    const next = state.pageZoom + direction * 0.1;
-    state.pageZoom = Math.max(0.5, Math.min(2.5, Number(next.toFixed(2))));
+    const next = state.pageZoom + direction * 0.08;
+    state.pageZoom = Math.max(0.1, Math.min(5, Number(next.toFixed(2))));
     renderEverything();
   }
 
-  async function renderCurrentPdfPage() {
-    resizeOverlayCanvas();
-    resizePdfCanvas();
-
+  async function renderCurrentPdfPage(targetWidth) {
     if (!state.previewDoc) {
       clearPdfCanvas();
       state.renderBox = {
@@ -1072,26 +1111,22 @@
       const scaleMultiplier = model ? model.scale : 1;
       const rotation = normalizeRotation(page.rotate + extraRotation);
 
-      const rect = viewerContainer.getBoundingClientRect();
-      const cssWidth = Math.max(1, rect.width);
-      const cssHeight = Math.max(1, rect.height);
       const baseViewport = page.getViewport({ scale: 1, rotation });
-      const fitScale = Math.min(
-        cssWidth / Math.max(1, baseViewport.width),
-        cssHeight / Math.max(1, baseViewport.height)
-      );
-      const finalScale = Math.max(
-        0.05,
-        fitScale * Math.max(0.25, scaleMultiplier) * state.pageZoom
-      );
+      const widthTarget = Number.isFinite(targetWidth)
+        ? Math.max(24, targetWidth)
+        : Math.max(24, baseViewport.width);
+      const widthScale = widthTarget / Math.max(1, baseViewport.width);
+      const finalScale = Math.max(0.02, widthScale * Math.max(0.25, scaleMultiplier));
       const viewport = page.getViewport({ scale: finalScale, rotation });
-      const left = (cssWidth - viewport.width) / 2;
-      const top = (cssHeight - viewport.height) / 2;
+      viewerContainer.style.width = `${Math.ceil(viewport.width)}px`;
+      viewerContainer.style.height = `${Math.ceil(viewport.height)}px`;
+      resizeOverlayCanvas();
+      resizePdfCanvas();
 
       clearPdfCanvas();
       state.renderBox = {
-        left,
-        top,
+        left: 0,
+        top: 0,
         width: viewport.width,
         height: viewport.height,
       };
@@ -1099,7 +1134,6 @@
       const renderTask = page.render({
         canvasContext: pdfCtx,
         viewport,
-        transform: [1, 0, 0, 1, left, top],
       });
       state.activeRenderTask = renderTask;
       await renderTask.promise;
@@ -1211,6 +1245,9 @@
       })
       .join("");
 
+    const baseWidth = Math.max(220, Math.min(360, allPagesScroll.clientWidth * 0.32 || 320));
+    const maxWidth = Math.max(24, baseWidth * state.pageZoom);
+
     if (inlineEditPageId) {
       const host = allPagesScroll.querySelector(
         `[data-inline-editor-page-id="${inlineEditPageId}"]`
@@ -1218,10 +1255,12 @@
       if (host) {
         host.appendChild(viewerContainer);
         viewerContainer.classList.remove("ui-hidden");
-        await renderCurrentPdfPage();
+        await renderCurrentPdfPage(maxWidth);
       }
     } else {
       viewerContainer.classList.add("ui-hidden");
+      viewerContainer.style.width = "";
+      viewerContainer.style.height = "";
       state.renderBox = {
         left: 0,
         top: 0,
@@ -1230,9 +1269,6 @@
       };
       drawOverlay();
     }
-
-    const baseWidth = Math.max(180, Math.min(760, allPagesScroll.clientWidth - 24));
-    const maxWidth = Math.max(120, baseWidth * state.pageZoom);
     for (const item of items) {
       if (token !== state.allPagesRenderToken) {
         return;
