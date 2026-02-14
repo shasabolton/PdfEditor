@@ -1327,7 +1327,7 @@
       canvas.width = pixelWidth;
       canvas.height = pixelHeight;
       canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
+      canvas.style.height = "auto";
     }
 
     const ctx = canvas.getContext("2d");
