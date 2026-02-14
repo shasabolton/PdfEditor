@@ -559,10 +559,14 @@
       ignoreEncryption: true,
     });
     const outputDoc = await window.PDFLib.PDFDocument.create();
-    const indices = sourceDoc.getPageIndices();
-    const pages = await outputDoc.copyPages(sourceDoc, indices);
-    if (!pages.length) {
+    const sourcePages = sourceDoc.getPages();
+    if (!sourcePages.length) {
       throw new Error("No pages available for multi-page generation.");
+    }
+    const embeddedPages = [];
+    for (const sourcePage of sourcePages) {
+      const embedded = await outputDoc.embedPage(sourcePage);
+      embeddedPages.push(embedded);
     }
 
     const cols = Math.ceil(Math.sqrt(pagesPerSheet));
@@ -574,17 +578,17 @@
     const cellHeight =
       (sheetSize.height - margin * 2 - gutter * (rows - 1)) / rows;
 
-    for (let start = 0; start < pages.length; start += pagesPerSheet) {
-      const chunk = pages.slice(start, start + pagesPerSheet);
+    for (let start = 0; start < embeddedPages.length; start += pagesPerSheet) {
+      const chunk = embeddedPages.slice(start, start + pagesPerSheet);
       const sheet = outputDoc.addPage([sheetSize.width, sheetSize.height]);
       for (let i = 0; i < chunk.length; i += 1) {
-        const page = chunk[i];
+        const embeddedPage = chunk[i];
         const row = Math.floor(i / cols);
         const col = i % cols;
         const xCell = margin + col * (cellWidth + gutter);
         const yTop = sheetSize.height - margin - row * (cellHeight + gutter);
-        const sourceWidth = page.getWidth();
-        const sourceHeight = page.getHeight();
+        const sourceWidth = embeddedPage.width;
+        const sourceHeight = embeddedPage.height;
         const scale = Math.min(
           cellWidth / Math.max(1, sourceWidth),
           cellHeight / Math.max(1, sourceHeight)
@@ -593,7 +597,7 @@
         const drawHeight = sourceHeight * scale;
         const x = xCell + (cellWidth - drawWidth) / 2;
         const y = yTop - cellHeight + (cellHeight - drawHeight) / 2;
-        sheet.drawPage(page, {
+        sheet.drawPage(embeddedPage, {
           x,
           y,
           width: drawWidth,
