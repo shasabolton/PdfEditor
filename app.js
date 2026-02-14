@@ -5,6 +5,7 @@
   const mergeFileInput = document.getElementById("mergeFileInput");
   const saveBtn = document.getElementById("saveBtn");
   const closeFileBtn = document.getElementById("closeFileBtn");
+  const undoBtn = document.getElementById("undoBtn");
   const topbar = document.querySelector(".topbar");
   const modeSelect = document.getElementById("modeSelect");
   const zoomSelect = document.getElementById("zoomSelect");
@@ -49,6 +50,7 @@
     mergePlacementPrompt: false,
     mergeTargetPageId: "",
     pendingMergePlacement: "",
+    undoStack: [],
     lastSavedUrl: "",
     lastSavedName: "",
     pageOrder: [],
@@ -81,6 +83,7 @@
     mergeFileInput.addEventListener("change", onMergeFileSelected);
     saveBtn.addEventListener("click", onSaveClick);
     closeFileBtn.addEventListener("click", onCloseFileClick);
+    undoBtn.addEventListener("click", onUndoClick);
     openSavedBtn.addEventListener("click", onOpenSavedClick);
     modeSelect.addEventListener("change", () => {
       state.mode = modeSelect.value;
@@ -165,8 +168,9 @@
     reader.readAsArrayBuffer(file);
   }
 
-  async function loadDocumentFromBytes(bytes, fileName) {
-    resetLoadedDocument();
+  async function loadDocumentFromBytes(bytes, fileName, options) {
+    const preserveUndoStack = !!(options && options.preserveUndoStack);
+    resetLoadedDocument({ preserveUndoStack });
     state.fileName = fileName || "document.pdf";
     state.sourceBytes = bytes;
     state.sourceUrl = URL.createObjectURL(
@@ -366,6 +370,43 @@
     renderEverything();
   }
 
+  async function onUndoClick() {
+    if (!state.undoStack.length) {
+      setStatus("Nothing to undo.", "error");
+      return;
+    }
+    const snapshot = state.undoStack.pop();
+    try {
+      const bytes = new Uint8Array(snapshot.bytes);
+      const loaded = await loadDocumentFromBytes(
+        bytes,
+        snapshot.fileName || state.fileName || "document.pdf",
+        { preserveUndoStack: true }
+      );
+      if (!loaded) {
+        return;
+      }
+      setStatus("Undo applied.", "ok");
+      renderEverything();
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Undo failed.", "error");
+    }
+  }
+
+  function pushUndoSnapshotFromBytes(bytes) {
+    if (!bytes || !bytes.length) {
+      return;
+    }
+    state.undoStack.push({
+      bytes: new Uint8Array(bytes),
+      fileName: state.fileName || "document.pdf",
+    });
+    if (state.undoStack.length > 20) {
+      state.undoStack.shift();
+    }
+  }
+
   async function onMergeFileSelected(event) {
     const file = event.target.files && event.target.files[0];
     mergeFileInput.value = "";
@@ -397,8 +438,13 @@
       setStatus("Merging file...", "ok");
       const mergeBytes = new Uint8Array(await file.arrayBuffer());
       const currentBytes = await buildCurrentWorkingBytesForMerge();
+      pushUndoSnapshotFromBytes(currentBytes);
       const merged = await mergePdfAtPosition(currentBytes, mergeBytes, placement, anchorIndex);
-      const loaded = await loadDocumentFromBytes(merged.bytes, state.fileName || "document.pdf");
+      const loaded = await loadDocumentFromBytes(
+        merged.bytes,
+        state.fileName || "document.pdf",
+        { preserveUndoStack: true }
+      );
       if (!loaded) {
         state.mergePlacementPrompt = false;
         state.mergeTargetPageId = "";
@@ -423,6 +469,139 @@
       console.error(error);
       setStatus(error.message || "Merge failed.", "error");
     }
+  }
+
+  async function runMultiPageGenerate() {
+    if (!state.canEdit || !state.parsed) {
+      setStatus("Load an editable PDF first.", "error");
+      return;
+    }
+    const currentPageId = getCurrentPageId();
+    if (!currentPageId) {
+      setStatus("Select a page before generating multi-page output.", "error");
+      return;
+    }
+
+    const sizePrompt = window.prompt(
+      "Choose sheet size: A5, A4, A3, Letter, Legal, Tabloid",
+      "A4"
+    );
+    if (!sizePrompt) {
+      return;
+    }
+    const sheetSize = resolveStandardSheetSize(sizePrompt);
+    if (!sheetSize) {
+      setStatus("Unknown sheet size.", "error");
+      return;
+    }
+
+    const perSheetPrompt = window.prompt(
+      "Pages per sheet: 1, 2, 4, 6, 8, 9, 16",
+      "4"
+    );
+    if (!perSheetPrompt) {
+      return;
+    }
+    const pagesPerSheet = Number.parseInt(perSheetPrompt, 10);
+    if (![1, 2, 4, 6, 8, 9, 16].includes(pagesPerSheet)) {
+      setStatus("Unsupported pages per sheet value.", "error");
+      return;
+    }
+
+    try {
+      setStatus("Generating multi-page layout...", "ok");
+      const currentBytes = await buildCurrentWorkingBytesForMerge();
+      pushUndoSnapshotFromBytes(currentBytes);
+      const generatedBytes = await generateMultiPagePdf(
+        currentBytes,
+        sheetSize,
+        pagesPerSheet
+      );
+      const loaded = await loadDocumentFromBytes(
+        generatedBytes,
+        state.fileName || "document.pdf",
+        { preserveUndoStack: true }
+      );
+      if (!loaded) {
+        return;
+      }
+      setStatus(
+        `Generated multi-page layout (${sheetSize.name}, ${pagesPerSheet} per sheet).`,
+        "ok"
+      );
+      renderEverything();
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Multi-page generation failed.", "error");
+    }
+  }
+
+  function resolveStandardSheetSize(input) {
+    const key = String(input || "").trim().toLowerCase();
+    const lookup = {
+      a5: { name: "A5", width: 420, height: 595 },
+      a4: { name: "A4", width: 595, height: 842 },
+      a3: { name: "A3", width: 842, height: 1191 },
+      letter: { name: "Letter", width: 612, height: 792 },
+      legal: { name: "Legal", width: 612, height: 1008 },
+      tabloid: { name: "Tabloid", width: 792, height: 1224 },
+    };
+    return lookup[key] || null;
+  }
+
+  async function generateMultiPagePdf(sourceBytes, sheetSize, pagesPerSheet) {
+    if (!state.pdfLibReady) {
+      throw new Error("Local PDF editing engine is unavailable.");
+    }
+    const sourceDoc = await window.PDFLib.PDFDocument.load(sourceBytes, {
+      updateMetadata: false,
+      throwOnInvalidObject: false,
+      ignoreEncryption: true,
+    });
+    const outputDoc = await window.PDFLib.PDFDocument.create();
+    const indices = sourceDoc.getPageIndices();
+    const pages = await outputDoc.copyPages(sourceDoc, indices);
+    if (!pages.length) {
+      throw new Error("No pages available for multi-page generation.");
+    }
+
+    const cols = Math.ceil(Math.sqrt(pagesPerSheet));
+    const rows = Math.ceil(pagesPerSheet / cols);
+    const margin = Math.max(8, Math.min(sheetSize.width, sheetSize.height) * 0.035);
+    const gutter = Math.max(4, margin * 0.45);
+    const cellWidth =
+      (sheetSize.width - margin * 2 - gutter * (cols - 1)) / cols;
+    const cellHeight =
+      (sheetSize.height - margin * 2 - gutter * (rows - 1)) / rows;
+
+    for (let start = 0; start < pages.length; start += pagesPerSheet) {
+      const chunk = pages.slice(start, start + pagesPerSheet);
+      const sheet = outputDoc.addPage([sheetSize.width, sheetSize.height]);
+      for (let i = 0; i < chunk.length; i += 1) {
+        const page = chunk[i];
+        const row = Math.floor(i / cols);
+        const col = i % cols;
+        const xCell = margin + col * (cellWidth + gutter);
+        const yTop = sheetSize.height - margin - row * (cellHeight + gutter);
+        const sourceWidth = page.getWidth();
+        const sourceHeight = page.getHeight();
+        const scale = Math.min(
+          cellWidth / Math.max(1, sourceWidth),
+          cellHeight / Math.max(1, sourceHeight)
+        );
+        const drawWidth = sourceWidth * scale;
+        const drawHeight = sourceHeight * scale;
+        const x = xCell + (cellWidth - drawWidth) / 2;
+        const y = yTop - cellHeight + (cellHeight - drawHeight) / 2;
+        sheet.drawPage(page, {
+          x,
+          y,
+          width: drawWidth,
+          height: drawHeight,
+        });
+      }
+    }
+    return outputDoc.save();
   }
 
   function onOpenSavedClick() {
@@ -857,7 +1036,8 @@
     state.selectedPageId = state.pageOrder[0] || "";
   }
 
-  function resetLoadedDocument() {
+  function resetLoadedDocument(options) {
+    const preserveUndoStack = !!(options && options.preserveUndoStack);
     if (state.activeRenderTask && typeof state.activeRenderTask.cancel === "function") {
       try {
         state.activeRenderTask.cancel();
@@ -893,6 +1073,9 @@
     state.mergePlacementPrompt = false;
     state.mergeTargetPageId = "";
     state.pendingMergePlacement = "";
+    if (!preserveUndoStack) {
+      state.undoStack = [];
+    }
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
@@ -934,6 +1117,7 @@
 
     saveBtn.disabled = !editable;
     closeFileBtn.disabled = !state.sourceUrl;
+    undoBtn.disabled = state.undoStack.length === 0;
     openSavedBtn.disabled = !state.lastSavedUrl;
     modeSelect.disabled = !editable;
     zoomSelect.disabled = !state.previewDoc;
@@ -1042,6 +1226,9 @@
           <button type="button" data-action="merge-file" data-page-id="${pageId}" ${
         page.deleted ? "disabled" : ""
       }>Merge File</button>
+          <button type="button" data-action="multi-page" data-page-id="${pageId}" ${
+        page.deleted ? "disabled" : ""
+      }>Multi Page</button>
         </div>
         ${
           showMergeChoice
@@ -1115,6 +1302,10 @@
     }
     const action = button.dataset.action || "";
     const pageId = button.dataset.pageId || getCurrentPageId();
+    if (action === "multi-page") {
+      runMultiPageGenerate();
+      return;
+    }
     if (action === "merge-file") {
       if (!state.canEdit || !state.parsed) {
         setStatus("Load an editable PDF before merging.", "error");
@@ -1484,7 +1675,7 @@
       canvas.width = pixelWidth;
       canvas.height = pixelHeight;
       canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = "auto";
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
     }
 
     const ctx = canvas.getContext("2d");
@@ -1496,6 +1687,53 @@
       viewport,
     });
     await task.promise;
+    drawPageMarksOnPreviewCanvas(ctx, item, viewport.width, viewport.height);
+  }
+
+  function drawPageMarksOnPreviewCanvas(ctx, item, width, height) {
+    if (!item || !item.pageId) {
+      return;
+    }
+    const marks = state.annotationsByPage.get(item.pageId);
+    if (!marks) {
+      return;
+    }
+
+    if (marks.strokes && marks.strokes.length) {
+      for (const stroke of marks.strokes) {
+        if (!stroke || !stroke.points || stroke.points.length < 2) {
+          continue;
+        }
+        ctx.save();
+        ctx.strokeStyle = stroke.color || "#ff0000";
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = Math.max(1, (stroke.widthNorm || 0.001) * width);
+        ctx.beginPath();
+        ctx.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+        for (let i = 1; i < stroke.points.length; i += 1) {
+          ctx.lineTo(stroke.points[i].x * width, stroke.points[i].y * height);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    if (marks.texts && marks.texts.length) {
+      for (const textItem of marks.texts) {
+        ctx.save();
+        const fontPx = Math.max(8, Math.round((textItem.sizeNorm || 0.02) * height));
+        ctx.font = `${fontPx}px sans-serif`;
+        ctx.fillStyle = textItem.color || "#ffffff";
+        ctx.textBaseline = "top";
+        ctx.fillText(
+          textItem.text || "",
+          (textItem.x || 0) * width,
+          (textItem.y || 0) * height
+        );
+        ctx.restore();
+      }
+    }
   }
 
   function clearPdfCanvas() {

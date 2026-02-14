@@ -35,6 +35,7 @@ The editor is intended to support this workflow:
 
 - Open local PDF from **File** dropdown.
 - Save and Close are also in **File** dropdown.
+- Undo button in top toolbar can restore previous generated/merged state.
 - PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
 - Vertical all-pages preview stack is rendered below the main viewer so you can scroll through pages.
 
@@ -48,6 +49,7 @@ The editor is intended to support this workflow:
 - **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
 - **Merge file:** click `Merge File` in Pages mode, then choose `Before` or `After` (buttons appear only after clicking Merge File), then pick another PDF.
+- **Multi page:** click `Multi Page`, choose sheet size (A-series / Letter / Legal / Tabloid), then choose pages-per-sheet; result can be undone with top **Undo**.
 - In any edit mode, the editable page window is shown **inline in place of that page card** (not in a separate top panel).
 - Active editable page is highlighted with a **red border**.
 - Structural edits are always applied in saved output PDF.
