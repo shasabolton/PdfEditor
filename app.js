@@ -824,6 +824,7 @@
     normalizeCurrentPageIndex();
     ensureSelectedPageId();
     updateSavedDownloadUI();
+    updatePageRadiusScale();
 
     saveBtn.disabled = !editable;
     closeFileBtn.disabled = !state.sourceUrl;
@@ -851,6 +852,11 @@
 
     updateOverlayInteractivity();
     renderAllPagesScroll();
+  }
+
+  function updatePageRadiusScale() {
+    const radius = Math.max(2, Math.min(24, state.pageZoom * 6));
+    document.documentElement.style.setProperty("--page-radius", `${radius}px`);
   }
 
   function syncTopbarOffset() {
