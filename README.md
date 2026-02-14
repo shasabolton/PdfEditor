@@ -35,7 +35,7 @@ The editor is intended to support this workflow:
 
 - Open local PDF with file picker.
 - PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
-- Includes **Open In Browser** fallback button.
+- File actions are grouped in a **File** dropdown (`Open PDF`, `Save PDF`, `Close File`).
 - Vertical all-pages preview stack is rendered below the main viewer so you can scroll through pages.
 
 ### Page operations
@@ -47,6 +47,7 @@ The editor is intended to support this workflow:
 - **Resize:** selected page `Scale-` / `Scale+` controls (`25%` to `200%`).
 - **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
+- **Merge file:** in Pages mode, merge another PDF before or after current page (prompted).
 - In any edit mode, the editable page window is shown **inline in place of that page card** (not in a separate top panel).
 - Active editable page is highlighted with a **red border**.
 - Structural edits are always applied in saved output PDF.
@@ -79,7 +80,7 @@ Because this is a strict client-side static implementation (with locally bundled
 
 - Most standard PDFs are editable, including many modern xref/object-stream files.
 - Encrypted/password-protected PDFs can still open for preview but may remain **view-only**.
-- Extremely large/corrupt PDFs may fail preview and should be opened with **Open In Browser** fallback.
+- Extremely large/corrupt PDFs may fail preview.
 - Compatibility raster mode flattens original page content into images before saving (text is no longer selectable in flattened page layers).
 - Existing complex annotation structures may not always be fully preserved.
 - Draw/text placement is annotation-based and may vary slightly across PDF viewers.

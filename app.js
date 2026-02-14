@@ -2,8 +2,9 @@
   "use strict";
 
   const fileInput = document.getElementById("fileInput");
+  const mergeFileInput = document.getElementById("mergeFileInput");
   const saveBtn = document.getElementById("saveBtn");
-  const openExternalBtn = document.getElementById("openExternalBtn");
+  const closeFileBtn = document.getElementById("closeFileBtn");
   const modeSelect = document.getElementById("modeSelect");
   const zoomSelect = document.getElementById("zoomSelect");
   const modeToolPanel = document.getElementById("modeToolPanel");
@@ -64,8 +65,9 @@
 
   function bindEvents() {
     fileInput.addEventListener("change", onFileSelected);
+    mergeFileInput.addEventListener("change", onMergeFileSelected);
     saveBtn.addEventListener("click", onSaveClick);
-    openExternalBtn.addEventListener("click", onOpenExternalClick);
+    closeFileBtn.addEventListener("click", onCloseFileClick);
     openSavedBtn.addEventListener("click", onOpenSavedClick);
     modeSelect.addEventListener("change", () => {
       state.mode = modeSelect.value;
@@ -124,78 +126,11 @@
       return;
     }
 
-    resetLoadedDocument();
-    state.fileName = file.name;
-
     const reader = new FileReader();
     reader.onload = async () => {
       try {
         const bytes = new Uint8Array(reader.result);
-        state.sourceBytes = bytes;
-        state.sourceUrl = URL.createObjectURL(
-          new Blob([bytes], { type: "application/pdf" })
-        );
-
-        if (!state.pdfJsReady) {
-          setStatus(
-            "Preview renderer failed to initialize. You can still open externally and save edits.",
-            "error"
-          );
-        } else {
-          const loadingTask = window.pdfjsLib.getDocument({
-            data: bytes,
-            disableWorker: true,
-          });
-          state.previewDoc = await loadingTask.promise;
-        }
-
-        const editableInit = await initializeEditableModels(bytes);
-        let activeInit = editableInit;
-        if (!editableInit.ok) {
-          const rasterInit = await initializeRasterFallbackModels();
-          if (rasterInit.ok) {
-            activeInit = rasterInit;
-          } else {
-            state.canEdit = false;
-            state.editMode = "";
-            state.parsed = null;
-            setStatus(
-              rasterInit.reason ||
-                editableInit.reason ||
-                "Loaded in view-only mode. Save is disabled for this PDF.",
-              "error"
-            );
-            renderEverything();
-            return;
-          }
-        }
-
-        state.canEdit = true;
-        state.editMode = activeInit.mode || "pdf-lib";
-        state.parsed = {
-          pageCount: activeInit.pages.length,
-        };
-        initializePageModels(activeInit.pages);
-        state.currentPageActiveIndex = 0;
-        if (state.previewDoc) {
-          if (state.editMode === "raster-fallback") {
-            setStatus(
-              "PDF loaded in compatibility edit mode. Save works, but output pages are rasterized.",
-              "ok"
-            );
-          } else {
-            setStatus(
-              "PDF loaded. Live preview uses in-app canvas rendering (no browser PDF plugin needed).",
-              "ok"
-            );
-          }
-        } else {
-          setStatus(
-            "PDF loaded, but preview renderer is unavailable in this environment. Use Open In Browser for visual reference.",
-            "error"
-          );
-        }
-        renderEverything();
+        await loadDocumentFromBytes(bytes, file.name);
       } catch (error) {
         console.error(error);
         setStatus("Failed to open this PDF for preview.", "error");
@@ -207,6 +142,77 @@
       setStatus("Unable to open file.", "error");
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  async function loadDocumentFromBytes(bytes, fileName) {
+    resetLoadedDocument();
+    state.fileName = fileName || "document.pdf";
+    state.sourceBytes = bytes;
+    state.sourceUrl = URL.createObjectURL(
+      new Blob([bytes], { type: "application/pdf" })
+    );
+
+    if (!state.pdfJsReady) {
+      setStatus(
+        "Preview renderer failed to initialize. Editing is still available if PDF writer loads.",
+        "error"
+      );
+    } else {
+      const loadingTask = window.pdfjsLib.getDocument({
+        data: bytes,
+        disableWorker: true,
+      });
+      state.previewDoc = await loadingTask.promise;
+    }
+
+    const editableInit = await initializeEditableModels(bytes);
+    let activeInit = editableInit;
+    if (!editableInit.ok) {
+      const rasterInit = await initializeRasterFallbackModels();
+      if (rasterInit.ok) {
+        activeInit = rasterInit;
+      } else {
+        state.canEdit = false;
+        state.editMode = "";
+        state.parsed = null;
+        setStatus(
+          rasterInit.reason ||
+            editableInit.reason ||
+            "Loaded in view-only mode. Save is disabled for this PDF.",
+          "error"
+        );
+        renderEverything();
+        return false;
+      }
+    }
+
+    state.canEdit = true;
+    state.editMode = activeInit.mode || "pdf-lib";
+    state.parsed = {
+      pageCount: activeInit.pages.length,
+    };
+    initializePageModels(activeInit.pages);
+    state.currentPageActiveIndex = 0;
+    if (state.previewDoc) {
+      if (state.editMode === "raster-fallback") {
+        setStatus(
+          "PDF loaded in compatibility edit mode. Save works, but output pages are rasterized.",
+          "ok"
+        );
+      } else {
+        setStatus(
+          "PDF loaded. Live preview uses in-app canvas rendering.",
+          "ok"
+        );
+      }
+    } else {
+      setStatus(
+        "PDF loaded, but preview renderer is unavailable in this environment.",
+        "error"
+      );
+    }
+    renderEverything();
+    return true;
   }
 
   async function initializeEditableModels(bytes) {
@@ -333,8 +339,70 @@
     }
   }
 
-  function onOpenExternalClick() {
-    openPdfExternally();
+  function onCloseFileClick() {
+    resetLoadedDocument();
+    setStatus("Closed file.", "ok");
+    renderEverything();
+  }
+
+  async function onMergeFileSelected(event) {
+    const file = event.target.files && event.target.files[0];
+    mergeFileInput.value = "";
+    if (!file) {
+      return;
+    }
+    if (!state.canEdit || !state.parsed) {
+      setStatus("Load an editable PDF before merging.", "error");
+      return;
+    }
+    const selectedPageId = getCurrentPageId();
+    if (!selectedPageId) {
+      setStatus("Select a page before merging.", "error");
+      return;
+    }
+    const anchorIndex = getActiveIndexForPageId(selectedPageId);
+    if (anchorIndex < 0) {
+      setStatus("Current page is not available for merge placement.", "error");
+      return;
+    }
+
+    const answer = window
+      .prompt("Merge file before or after current page? Type: before / after", "after");
+    if (!answer) {
+      return;
+    }
+    const placement = answer.trim().toLowerCase();
+    if (placement !== "before" && placement !== "after") {
+      setStatus("Merge cancelled. Use exactly: before or after.", "error");
+      return;
+    }
+
+    try {
+      setStatus("Merging file...", "ok");
+      const mergeBytes = new Uint8Array(await file.arrayBuffer());
+      const currentBytes = await buildCurrentWorkingBytesForMerge();
+      const merged = await mergePdfAtPosition(currentBytes, mergeBytes, placement, anchorIndex);
+      const loaded = await loadDocumentFromBytes(merged.bytes, state.fileName || "document.pdf");
+      if (!loaded) {
+        return;
+      }
+      const selectIndex =
+        placement === "before"
+          ? anchorIndex
+          : anchorIndex + merged.insertedCount;
+      setCurrentPageActiveIndex(selectIndex);
+      const activeIds = getActivePageIds();
+      state.selectedPageId =
+        activeIds[Math.max(0, Math.min(activeIds.length - 1, selectIndex))] || "";
+      renderEverything();
+      setStatus(
+        `Merged ${file.name} ${placement} current page (${merged.insertedCount} pages).`,
+        "ok"
+      );
+    } catch (error) {
+      console.error(error);
+      setStatus(error.message || "Merge failed.", "error");
+    }
   }
 
   function onOpenSavedClick() {
@@ -746,7 +814,7 @@
     updateSavedDownloadUI();
 
     saveBtn.disabled = !editable;
-    openExternalBtn.disabled = !state.sourceUrl;
+    closeFileBtn.disabled = !state.sourceUrl;
     openSavedBtn.disabled = !state.lastSavedUrl;
     modeSelect.disabled = !editable;
     zoomSelect.disabled = !state.previewDoc;
@@ -815,11 +883,7 @@
       const canDelete = page.deleted || getActivePageIds().length > 1;
       modeToolPanel.innerHTML = `
         <div class="mode-tools-row">
-          <strong>Source ${page.sourcePageNumber} · ${
-        page.deleted ? "Deleted" : `Output ${outputIdx + 1}`
-      } · ${Math.round(
-        page.scale * 100
-      )}%</strong>
+          <strong>${page.deleted ? "Deleted page" : `Page ${outputIdx + 1}`}</strong>
           <button type="button" data-action="up" data-page-id="${pageId}" ${
         canMoveUp ? "" : "disabled"
       }>Up</button>
@@ -838,6 +902,9 @@
           <button type="button" class="danger" data-action="delete-toggle" data-page-id="${pageId}" ${
         canDelete ? "" : "disabled"
       }>${page.deleted ? "Restore" : "Delete"}</button>
+          <button type="button" data-action="merge-file" data-page-id="${pageId}" ${
+        page.deleted ? "disabled" : ""
+      }>Merge File</button>
         </div>
       `;
       return;
@@ -897,6 +964,18 @@
       return;
     }
     const action = button.dataset.action || "";
+    if (action === "merge-file") {
+      if (!state.canEdit || !state.parsed) {
+        setStatus("Load an editable PDF before merging.", "error");
+        return;
+      }
+      if (!getCurrentPageId()) {
+        setStatus("Select a page before merging.", "error");
+        return;
+      }
+      mergeFileInput.click();
+      return;
+    }
     if (action === "clear-marks") {
       clearCurrentPageMarks();
       return;
@@ -1072,8 +1151,8 @@
           scale: page.scale,
           deleted: !!page.deleted,
           label: page.deleted
-            ? `Deleted · Source ${page.sourcePageNumber}`
-            : `Output ${activeIndexMap.get(id) || "-"} · Source ${page.sourcePageNumber}`,
+            ? `Page ${i + 1} (Deleted)`
+            : `Page ${activeIndexMap.get(id) || i + 1}`,
           selected: id === state.selectedPageId,
         });
       }
@@ -1527,6 +1606,55 @@
     }
 
     return outputDoc.save();
+  }
+
+  async function buildCurrentWorkingBytesForMerge() {
+    if (!state.canEdit || !state.parsed || !state.sourceBytes) {
+      throw new Error("No editable PDF is currently loaded.");
+    }
+    if (state.editMode === "raster-fallback") {
+      return buildEditedPdfFromRasterPreview();
+    }
+    try {
+      return await buildEditedPdfWithPdfLib();
+    } catch (error) {
+      if (!state.previewDoc) {
+        throw error;
+      }
+      return buildEditedPdfFromRasterPreview();
+    }
+  }
+
+  async function mergePdfAtPosition(baseBytes, incomingBytes, placement, anchorIndex) {
+    if (!state.pdfLibReady) {
+      throw new Error("Local PDF editing engine is unavailable.");
+    }
+    const baseDoc = await window.PDFLib.PDFDocument.load(baseBytes, {
+      updateMetadata: false,
+      throwOnInvalidObject: false,
+      ignoreEncryption: true,
+    });
+    const incomingDoc = await window.PDFLib.PDFDocument.load(incomingBytes, {
+      updateMetadata: false,
+      throwOnInvalidObject: false,
+      ignoreEncryption: true,
+    });
+    const incomingIndices = incomingDoc.getPageIndices();
+    if (!incomingIndices.length) {
+      throw new Error("Selected merge PDF has no pages.");
+    }
+    const copiedPages = await baseDoc.copyPages(incomingDoc, incomingIndices);
+    let insertAt = placement === "before" ? anchorIndex : anchorIndex + 1;
+    insertAt = Math.max(0, Math.min(baseDoc.getPageCount(), insertAt));
+    for (const page of copiedPages) {
+      baseDoc.insertPage(insertAt, page);
+      insertAt += 1;
+    }
+    const bytes = await baseDoc.save();
+    return {
+      bytes,
+      insertedCount: copiedPages.length,
+    };
   }
 
   async function buildEditedPdfFromRasterPreview() {
@@ -2674,20 +2802,6 @@
       out += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
     }
     return out;
-  }
-
-  function openPdfExternally() {
-    const openUrl = state.sourceUrl;
-    if (!openUrl) {
-      setStatus("Load a PDF first.", "error");
-      return;
-    }
-    const popup = window.open(openUrl, "_blank", "noopener,noreferrer");
-    if (popup) {
-      return;
-    }
-    // Fallback for restricted webviews where popups are blocked.
-    window.location.href = openUrl;
   }
 
   async function deliverSavedPdf(bytes, fileName) {

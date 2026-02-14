@@ -83,6 +83,39 @@ button:not(:disabled),
   color: var(--text-dim);
 }
 
+.file-menu {
+  position: relative;
+}
+
+.file-menu summary {
+  list-style: none;
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  border-radius: 0.5rem;
+  padding: 0.42rem 0.7rem;
+  cursor: pointer;
+}
+
+.file-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.file-menu-list {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 12rem;
+  z-index: 2200;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  background: var(--panel);
+  padding: 0.45rem;
+  display: grid;
+  gap: 0.35rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
 .mode-tool-panel {
   border: 1px solid var(--border);
   border-radius: 0.6rem;

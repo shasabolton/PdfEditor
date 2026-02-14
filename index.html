@@ -11,12 +11,17 @@
     <div class="topbar-main">
       <h1>Vanilla PDF Editor</h1>
       <div class="topbar-actions">
-        <label class="file-input-label">
-          <span>Open PDF</span>
-          <input id="fileInput" type="file" accept="application/pdf">
-        </label>
-        <button id="saveBtn" type="button" disabled>Save PDF</button>
-        <button id="openExternalBtn" type="button" disabled>Open In Browser</button>
+        <details class="file-menu">
+          <summary>File</summary>
+          <div class="file-menu-list">
+            <label class="file-input-label">
+              <span>Open PDF</span>
+              <input id="fileInput" type="file" accept="application/pdf">
+            </label>
+            <button id="saveBtn" type="button" disabled>Save PDF</button>
+            <button id="closeFileBtn" type="button" disabled>Close File</button>
+          </div>
+        </details>
 
         <label for="modeSelect">Mode</label>
         <select id="modeSelect" disabled>
@@ -38,6 +43,7 @@
         </select>
       </div>
     </div>
+    <input id="mergeFileInput" type="file" accept="application/pdf" class="ui-hidden">
     <div id="modeToolPanel" class="mode-tool-panel hidden"></div>
   </header>
 
@@ -49,7 +55,7 @@
       </div>
       <div id="allPagesScroll" class="all-pages-scroll" aria-label="All pages preview"></div>
       <p class="viewer-help">
-        Preview is rendered directly in-app. If a specific file still fails to display, tap <strong>Open In Browser</strong>.
+        Select a page from the list. In edit modes, that page opens inline for editing.
       </p>
 
       <p id="statusText">Load a PDF to begin.</p>
