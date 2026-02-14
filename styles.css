@@ -9,6 +9,7 @@
   --danger: #f46262;
   --ok: #6bd58f;
   --border: #2d3648;
+  --topbar-height: 0px;
 }
 
 * {
@@ -52,8 +53,10 @@ button:not(:disabled),
 }
 
 .topbar {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 2000;
   display: grid;
   gap: 0.45rem;
@@ -156,7 +159,7 @@ button:not(:disabled),
 }
 
 .app-shell {
-  padding: 0.7rem;
+  padding: calc(var(--topbar-height) + 0.7rem) 0.7rem 0.7rem;
 }
 
 .viewer-section {

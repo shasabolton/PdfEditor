@@ -5,6 +5,7 @@
   const mergeFileInput = document.getElementById("mergeFileInput");
   const saveBtn = document.getElementById("saveBtn");
   const closeFileBtn = document.getElementById("closeFileBtn");
+  const topbar = document.querySelector(".topbar");
   const modeSelect = document.getElementById("modeSelect");
   const zoomSelect = document.getElementById("zoomSelect");
   const modeToolPanel = document.getElementById("modeToolPanel");
@@ -95,6 +96,7 @@
     overlayCanvas.addEventListener("pointercancel", onOverlayPointerUp);
 
     window.addEventListener("resize", () => {
+      syncTopbarOffset();
       resizeOverlayCanvas();
       renderAllPagesScroll();
     });
@@ -833,6 +835,7 @@
     viewerContainer.classList.add("ui-hidden");
     modeToolPanel.classList.toggle("hidden", !editable || state.mode === "view");
     renderModeToolPanel();
+    syncTopbarOffset();
 
     if (!state.sourceUrl) {
       allPagesScroll.innerHTML = "";
@@ -848,6 +851,14 @@
 
     updateOverlayInteractivity();
     renderAllPagesScroll();
+  }
+
+  function syncTopbarOffset() {
+    if (!topbar) {
+      return;
+    }
+    const height = Math.max(0, Math.ceil(topbar.getBoundingClientRect().height));
+    document.documentElement.style.setProperty("--topbar-height", `${height}px`);
   }
 
   function setZoomSelectValue(zoom) {
@@ -873,6 +884,7 @@
     }
     if (!state.canEdit || !state.parsed || state.mode === "view") {
       modeToolPanel.innerHTML = "";
+      syncTopbarOffset();
       return;
     }
 
@@ -882,6 +894,7 @@
     if (!page) {
       modeToolPanel.innerHTML =
         '<div class="pages-help">No active page available for this mode.</div>';
+      syncTopbarOffset();
       return;
     }
 
@@ -929,6 +942,7 @@
             : ""
         }
       `;
+      syncTopbarOffset();
       return;
     }
 
@@ -942,6 +956,7 @@
           <button type="button" data-action="clear-marks">Clear Page Draw/Text</button>
         </div>
       `;
+      syncTopbarOffset();
       return;
     }
 
@@ -977,6 +992,7 @@
         </div>
         <div class="mode-tools-list">${listHtml}</div>
       `;
+      syncTopbarOffset();
     }
   }
 
