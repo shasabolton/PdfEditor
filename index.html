@@ -25,6 +25,7 @@
         <button id="prevPageBtn" type="button" disabled>Prev</button>
         <span id="pageIndicator">No file loaded</span>
         <button id="nextPageBtn" type="button" disabled>Next</button>
+        <button id="pageModeBtn" type="button" disabled>Page Mode</button>
 
         <label for="modeSelect">Mode</label>
         <select id="modeSelect" disabled>
@@ -42,10 +43,24 @@
         <button id="clearMarksBtn" type="button" disabled>Clear Page Draw/Text</button>
       </div>
 
+      <div id="pageEditPanel" class="page-edit-panel hidden">
+        <div class="page-edit-actions">
+          <strong id="selectedPageLabel">No page selected</strong>
+          <button id="panelPageUpBtn" type="button" data-action="up">Up</button>
+          <button id="panelPageDownBtn" type="button" data-action="down">Down</button>
+          <button id="panelPageScaleDownBtn" type="button" data-action="scale-down">Scale-</button>
+          <button id="panelPageScaleUpBtn" type="button" data-action="scale-up">Scale+</button>
+          <button id="panelPageRotateBtn" type="button" data-action="rotate-right">+90</button>
+          <button id="panelPageDeleteBtn" type="button" class="danger" data-action="delete-toggle">Delete</button>
+        </div>
+        <div id="pageList" class="page-strip" aria-label="Page strip"></div>
+      </div>
+
       <div id="viewerContainer">
         <canvas id="pdfCanvas" aria-label="PDF preview canvas"></canvas>
         <canvas id="overlayCanvas"></canvas>
       </div>
+      <div id="allPagesScroll" class="all-pages-scroll" aria-label="All pages preview"></div>
       <p class="viewer-help">
         Preview is rendered directly in-app. If a specific file still fails to display, tap <strong>Open In Browser</strong>.
       </p>
@@ -61,14 +76,6 @@
         <button id="openSavedBtn" type="button" disabled>Open Saved PDF</button>
       </div>
     </section>
-
-    <aside class="pages-section">
-      <h2>Pages</h2>
-      <div class="pages-help">
-        Use Move/Rotate/Scale/Delete per page.
-      </div>
-      <div id="pageList"></div>
-    </aside>
   </main>
 
   <script src="vendor/pdf.min.js"></script>

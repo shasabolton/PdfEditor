@@ -59,16 +59,16 @@ button:not(:disabled),
 .topbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.55rem;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
-  padding: 0.75rem 1rem;
+  padding: 0.6rem 0.8rem;
   background: var(--panel);
 }
 
 .topbar h1 {
-  font-size: 1.1rem;
+  font-size: 1rem;
   margin: 0;
 }
 
@@ -94,24 +94,20 @@ button:not(:disabled),
 
 .app-shell {
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 24rem;
-  gap: 1rem;
-  padding: 1rem;
+  padding: 0.7rem;
 }
 
-.viewer-section,
-.pages-section {
+.viewer-section {
   border: 1px solid var(--border);
   border-radius: 0.8rem;
   background: var(--panel);
-  padding: 0.75rem;
+  padding: 0.65rem;
 }
 
 .viewer-section {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 
 .viewer-toolbar {
@@ -128,7 +124,7 @@ button:not(:disabled),
 #viewerContainer {
   position: relative;
   width: 100%;
-  min-height: 60vh;
+  min-height: 42vh;
   background: #0d1017;
   border: 1px solid var(--border);
   border-radius: 0.6rem;
@@ -155,7 +151,104 @@ button:not(:disabled),
 .viewer-help {
   margin: 0;
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-size: 0.82rem;
+}
+
+#pageModeBtn.active {
+  border-color: var(--accent);
+}
+
+.page-edit-panel {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background: var(--panel-soft);
+  padding: 0.5rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.page-edit-panel.hidden {
+  display: none;
+}
+
+.page-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+#selectedPageLabel {
+  font-size: 0.88rem;
+  color: var(--text-dim);
+  margin-right: 0.25rem;
+}
+
+#pageList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.page-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  min-width: 7.3rem;
+  text-align: left;
+  background: #121725;
+}
+
+.page-chip small {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.page-chip.selected {
+  border-color: var(--accent);
+}
+
+.page-chip.current {
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.page-chip.deleted {
+  opacity: 0.56;
+}
+
+.all-pages-scroll {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.all-page-card {
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.45rem;
+  background: #101521;
+}
+
+.all-page-card[data-page-id]:not([data-page-id=""]) {
+  cursor: pointer;
+}
+
+.all-page-card.selected {
+  border-color: var(--accent);
+}
+
+.all-page-head {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 0.35rem;
+}
+
+.all-page-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+  border-radius: 0.35rem;
 }
 
 .text-editor-block {
@@ -227,64 +320,9 @@ button:not(:disabled),
   border-bottom: 1px dashed var(--accent);
 }
 
-.pages-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-}
-
-.pages-section h2 {
-  margin: 0;
-  font-size: 1rem;
-}
-
 .pages-help {
   color: var(--text-dim);
   font-size: 0.9rem;
-}
-
-#pageList {
-  display: grid;
-  gap: 0.6rem;
-  overflow: auto;
-  max-height: calc(100vh - 14rem);
-  padding-right: 0.25rem;
-}
-
-.page-row {
-  border: 1px solid var(--border);
-  border-radius: 0.65rem;
-  padding: 0.55rem;
-  display: grid;
-  gap: 0.45rem;
-  background: #131928;
-}
-
-.page-row.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
-}
-
-.page-row.deleted {
-  opacity: 0.62;
-}
-
-.page-row-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.page-row-meta {
-  color: var(--text-dim);
-  font-size: 0.83rem;
-}
-
-.page-row-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
 }
 
 .danger {
@@ -296,15 +334,7 @@ input[type="range"] {
 }
 
 @media (max-width: 980px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
-  #pageList {
-    max-height: none;
-  }
-
   #viewerContainer {
-    min-height: 50vh;
+    min-height: 35vh;
   }
 }

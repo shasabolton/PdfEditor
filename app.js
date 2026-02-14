@@ -6,6 +6,7 @@
   const openExternalBtn = document.getElementById("openExternalBtn");
   const prevPageBtn = document.getElementById("prevPageBtn");
   const nextPageBtn = document.getElementById("nextPageBtn");
+  const pageModeBtn = document.getElementById("pageModeBtn");
   const modeSelect = document.getElementById("modeSelect");
   const colorInput = document.getElementById("colorInput");
   const sizeInput = document.getElementById("sizeInput");
@@ -16,7 +17,16 @@
   const downloadFallback = document.getElementById("downloadFallback");
   const downloadFallbackLink = document.getElementById("downloadFallbackLink");
   const openSavedBtn = document.getElementById("openSavedBtn");
+  const pageEditPanel = document.getElementById("pageEditPanel");
+  const selectedPageLabel = document.getElementById("selectedPageLabel");
+  const panelPageUpBtn = document.getElementById("panelPageUpBtn");
+  const panelPageDownBtn = document.getElementById("panelPageDownBtn");
+  const panelPageScaleDownBtn = document.getElementById("panelPageScaleDownBtn");
+  const panelPageScaleUpBtn = document.getElementById("panelPageScaleUpBtn");
+  const panelPageRotateBtn = document.getElementById("panelPageRotateBtn");
+  const panelPageDeleteBtn = document.getElementById("panelPageDeleteBtn");
   const pageList = document.getElementById("pageList");
+  const allPagesScroll = document.getElementById("allPagesScroll");
   const textList = document.getElementById("textList");
   const viewerContainer = document.getElementById("viewerContainer");
   const pdfCanvas = document.getElementById("pdfCanvas");
@@ -44,6 +54,9 @@
     parsed: null,
     canEdit: false,
     editMode: "",
+    pageMode: false,
+    selectedPageId: "",
+    allPagesRenderToken: 0,
     lastSavedUrl: "",
     lastSavedName: "",
     pageOrder: [],
@@ -68,12 +81,18 @@
     saveBtn.addEventListener("click", onSaveClick);
     openExternalBtn.addEventListener("click", onOpenExternalClick);
     openSavedBtn.addEventListener("click", onOpenSavedClick);
+    pageModeBtn.addEventListener("click", () => {
+      state.pageMode = !state.pageMode;
+      renderEverything();
+    });
     prevPageBtn.addEventListener("click", () => {
       setCurrentPageActiveIndex(state.currentPageActiveIndex - 1);
+      state.selectedPageId = getCurrentPageId();
       renderEverything();
     });
     nextPageBtn.addEventListener("click", () => {
       setCurrentPageActiveIndex(state.currentPageActiveIndex + 1);
+      state.selectedPageId = getCurrentPageId();
       renderEverything();
     });
     modeSelect.addEventListener("change", () => {
@@ -84,8 +103,8 @@
     clearMarksBtn.addEventListener("click", clearCurrentPageMarks);
     addCenteredTextBtn.addEventListener("click", addCenteredText);
 
-    pageList.addEventListener("click", onPageListClick);
-    pageList.addEventListener("input", onPageListInput);
+    pageEditPanel.addEventListener("click", onPageListClick);
+    allPagesScroll.addEventListener("click", onAllPagesScrollClick);
 
     textList.addEventListener("click", onTextListClick);
 
@@ -97,6 +116,7 @@
     window.addEventListener("resize", () => {
       resizeOverlayCanvas();
       renderCurrentPdfPage();
+      renderAllPagesScroll();
     });
   }
 
@@ -394,7 +414,7 @@
       return;
     }
 
-    const pageId = button.dataset.pageId;
+    const pageId = button.dataset.pageId || state.selectedPageId;
     const action = button.dataset.action;
     if (!pageId || !action) {
       return;
@@ -406,15 +426,12 @@
     }
 
     if (action === "select") {
-      if (page.deleted) {
-        setStatus("Restore this page before selecting it.", "error");
-        return;
-      }
+      state.selectedPageId = pageId;
       const idx = getActiveIndexForPageId(pageId);
       if (idx >= 0) {
         state.currentPageActiveIndex = idx;
-        renderEverything();
       }
+      renderEverything();
       return;
     }
 
@@ -431,18 +448,22 @@
       state.pageOrder[toIndex] = state.pageOrder[fromIndex];
       state.pageOrder[fromIndex] = temp;
       normalizeCurrentPageIndex();
-      renderEverything();
-      return;
-    }
-
-    if (action === "rotate-left") {
-      page.rotateDelta = normalizeRotation(page.rotateDelta - 90);
+      state.selectedPageId = pageId;
       renderEverything();
       return;
     }
 
     if (action === "rotate-right") {
       page.rotateDelta = normalizeRotation(page.rotateDelta + 90);
+      state.selectedPageId = pageId;
+      renderEverything();
+      return;
+    }
+
+    if (action === "scale-down" || action === "scale-up") {
+      const delta = action === "scale-up" ? 0.1 : -0.1;
+      page.scale = Math.max(0.25, Math.min(2, page.scale + delta));
+      state.selectedPageId = pageId;
       renderEverything();
       return;
     }
@@ -453,25 +474,39 @@
         return;
       }
       page.deleted = !page.deleted;
+      state.selectedPageId = pageId;
+      if (page.deleted) {
+        const idx = getActiveIndexForPageId(pageId);
+        if (idx >= 0) {
+          state.currentPageActiveIndex = idx;
+        }
+      } else {
+        const idx = getActiveIndexForPageId(pageId);
+        if (idx >= 0) {
+          state.currentPageActiveIndex = idx;
+        }
+      }
       normalizeCurrentPageIndex();
       renderEverything();
       return;
     }
   }
 
-  function onPageListInput(event) {
-    const scaleInput = event.target.closest("input[data-action='scale']");
-    if (!scaleInput) {
+  function onAllPagesScrollClick(event) {
+    const card = event.target.closest("[data-page-id]");
+    if (!card) {
       return;
     }
-    const pageId = scaleInput.dataset.pageId;
-    const page = state.pagesById.get(pageId);
-    if (!page) {
+    const pageId = card.dataset.pageId;
+    if (!pageId) {
       return;
     }
-    const scalePercent = Number(scaleInput.value);
-    page.scale = Math.max(0.25, Math.min(2, scalePercent / 100));
-    renderEverything();
+    state.selectedPageId = pageId;
+    const idx = getActiveIndexForPageId(pageId);
+    if (idx >= 0) {
+      state.currentPageActiveIndex = idx;
+      renderEverything();
+    }
   }
 
   function onTextListClick(event) {
@@ -672,6 +707,7 @@
       state.pagesById.set(id, model);
       state.annotationsByPage.set(id, { strokes: [], texts: [] });
     }
+    state.selectedPageId = state.pageOrder[0] || "";
   }
 
   function resetLoadedDocument() {
@@ -704,6 +740,9 @@
     state.parsed = null;
     state.canEdit = false;
     state.editMode = "";
+    state.pageMode = false;
+    state.selectedPageId = "";
+    state.allPagesRenderToken += 1;
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
@@ -717,6 +756,9 @@
       width: 0,
       height: 0,
     };
+    if (allPagesScroll) {
+      allPagesScroll.innerHTML = "";
+    }
     clearPdfCanvas();
     drawOverlay();
   }
@@ -725,11 +767,14 @@
     const editable = state.canEdit && !!state.parsed;
     const previewCount = getPreviewPageCount();
     normalizeCurrentPageIndex();
+    ensureSelectedPageId();
     updateSavedDownloadUI();
 
     saveBtn.disabled = !editable;
     openExternalBtn.disabled = !state.sourceUrl;
     openSavedBtn.disabled = !state.lastSavedUrl;
+    pageModeBtn.disabled = !editable;
+    pageModeBtn.classList.toggle("active", state.pageMode && editable);
     prevPageBtn.disabled = previewCount < 2 || state.currentPageActiveIndex <= 0;
     nextPageBtn.disabled =
       previewCount < 2 || state.currentPageActiveIndex >= previewCount - 1;
@@ -743,7 +788,9 @@
     if (!state.sourceUrl) {
       pageIndicator.textContent = "No file loaded";
       pageList.innerHTML = "";
+      allPagesScroll.innerHTML = "";
       textList.innerHTML = "";
+      pageEditPanel.classList.add("hidden");
       updateOverlayInteractivity();
       clearPdfCanvas();
       drawOverlay();
@@ -753,15 +800,19 @@
     if (!editable) {
       pageList.innerHTML =
         '<div class="pages-help">View-only mode: this PDF can be previewed, but the local writer cannot save edits for this file.</div>';
+      pageEditPanel.classList.add("hidden");
       textList.innerHTML = "";
     } else {
       renderPageList();
+      renderPageModePanelControls();
       renderTextList();
+      pageEditPanel.classList.toggle("hidden", !state.pageMode);
     }
 
     renderPageIndicator();
     updateOverlayInteractivity();
     renderCurrentPdfPage();
+    renderAllPagesScroll();
   }
 
   function renderPageIndicator() {
@@ -881,8 +932,123 @@
     }
   }
 
+  async function renderAllPagesScroll() {
+    if (!allPagesScroll) {
+      return;
+    }
+    const token = ++state.allPagesRenderToken;
+
+    if (!state.previewDoc) {
+      allPagesScroll.innerHTML = "";
+      return;
+    }
+
+    const items = [];
+    if (state.canEdit && state.parsed) {
+      const activeIds = getActivePageIds();
+      for (let i = 0; i < activeIds.length; i += 1) {
+        const id = activeIds[i];
+        const page = state.pagesById.get(id);
+        if (!page) {
+          continue;
+        }
+        items.push({
+          key: id,
+          pageId: id,
+          pageNumber: page.sourcePageNumber,
+          rotateDelta: page.rotateDelta,
+          scale: page.scale,
+          label: `Output ${i + 1} · Source ${page.sourcePageNumber}`,
+          selected: id === state.selectedPageId,
+        });
+      }
+    } else {
+      const count = Math.max(0, state.previewDoc.numPages || 0);
+      for (let i = 1; i <= count; i += 1) {
+        items.push({
+          key: `preview_${i}`,
+          pageId: "",
+          pageNumber: i,
+          rotateDelta: 0,
+          scale: 1,
+          label: `Page ${i}`,
+          selected: false,
+        });
+      }
+    }
+
+    if (!items.length) {
+      allPagesScroll.innerHTML =
+        '<div class="pages-help">No pages to preview.</div>';
+      return;
+    }
+
+    allPagesScroll.innerHTML = items
+      .map((item) => {
+        const classes = ["all-page-card"];
+        if (item.selected) {
+          classes.push("selected");
+        }
+        return `
+          <article class="${classes.join(" ")}" data-page-id="${item.pageId}">
+            <div class="all-page-head">${item.label}</div>
+            <canvas class="all-page-canvas" data-canvas-key="${item.key}"></canvas>
+          </article>
+        `;
+      })
+      .join("");
+
+    const maxWidth = Math.max(240, Math.min(820, allPagesScroll.clientWidth - 24));
+    for (const item of items) {
+      if (token !== state.allPagesRenderToken) {
+        return;
+      }
+      const canvas = allPagesScroll.querySelector(
+        `canvas[data-canvas-key="${item.key}"]`
+      );
+      if (!canvas) {
+        continue;
+      }
+      try {
+        await renderDocPageToCanvas(item, canvas, maxWidth);
+      } catch (error) {
+        console.warn("Unable to render all-pages preview canvas.", error);
+      }
+    }
+  }
+
+  async function renderDocPageToCanvas(item, canvas, targetWidth) {
+    const page = await state.previewDoc.getPage(item.pageNumber);
+    const rotation = normalizeRotation((page.rotate || 0) + (item.rotateDelta || 0));
+    const baseViewport = page.getViewport({ scale: 1, rotation });
+    const fitScale = targetWidth / Math.max(1, baseViewport.width);
+    const finalScale = Math.max(0.08, fitScale * Math.max(0.25, item.scale || 1));
+    const viewport = page.getViewport({ scale: finalScale, rotation });
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const pixelWidth = Math.max(1, Math.floor(viewport.width * dpr));
+    const pixelHeight = Math.max(1, Math.floor(viewport.height * dpr));
+
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+      canvas.style.width = `${Math.floor(viewport.width)}px`;
+      canvas.style.height = `${Math.floor(viewport.height)}px`;
+    }
+
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, viewport.width, viewport.height);
+    const task = page.render({
+      canvasContext: ctx,
+      viewport,
+    });
+    await task.promise;
+  }
+
   function renderPageList() {
     const currentId = getCurrentPageId();
+    const selectedId = state.selectedPageId;
     const activeIds = getActivePageIds();
     const activeIndexMap = new Map();
     for (let i = 0; i < activeIds.length; i += 1) {
@@ -890,15 +1056,18 @@
     }
 
     const html = state.pageOrder
-      .map((id, orderIndex) => {
+      .map((id) => {
         const page = state.pagesById.get(id);
         if (!page) {
           return "";
         }
-        const isSelected = id === currentId;
-        const classes = ["page-row"];
+        const isSelected = id === selectedId;
+        const classes = ["page-chip"];
         if (isSelected) {
           classes.push("selected");
+        }
+        if (id === currentId) {
+          classes.push("current");
         }
         if (page.deleted) {
           classes.push("deleted");
@@ -906,50 +1075,60 @@
 
         const activeLabel = page.deleted
           ? "deleted"
-          : `output #${activeIndexMap.get(id) || "-"}`;
+          : `#${activeIndexMap.get(id) || "-"}`;
         const rotateTotal = normalizeRotation(page.baseRotate + page.rotateDelta);
         const scalePercent = Math.round(page.scale * 100);
 
         return `
-          <article class="${classes.join(" ")}">
-            <div class="page-row-head">
-              <strong>Source page ${page.sourcePageNumber}</strong>
-              <span class="page-row-meta">${activeLabel}</span>
-            </div>
-            <div class="page-row-meta">rotate: ${rotateTotal}° | scale: ${scalePercent}%</div>
-            <div class="page-row-controls">
-              <button type="button" data-action="select" data-page-id="${id}" ${
-          page.deleted ? "disabled" : ""
-        }>Open</button>
-              <button type="button" data-action="up" data-page-id="${id}" ${
-          orderIndex === 0 ? "disabled" : ""
-        }>Up</button>
-              <button type="button" data-action="down" data-page-id="${id}" ${
-          orderIndex === state.pageOrder.length - 1 ? "disabled" : ""
-        }>Down</button>
-              <button type="button" data-action="rotate-left" data-page-id="${id}">Rotate -90</button>
-              <button type="button" data-action="rotate-right" data-page-id="${id}">Rotate +90</button>
-              <button type="button" class="danger" data-action="delete-toggle" data-page-id="${id}">
-                ${page.deleted ? "Restore" : "Delete"}
-              </button>
-            </div>
-            <label class="page-row-meta" for="scale_${id}">Scale</label>
-            <input
-              id="scale_${id}"
-              type="range"
-              min="25"
-              max="200"
-              step="5"
-              value="${scalePercent}"
-              data-action="scale"
-              data-page-id="${id}"
-            >
-          </article>
+          <button type="button" class="${classes.join(" ")}" data-action="select" data-page-id="${id}">
+            <span>Page ${page.sourcePageNumber}</span>
+            <small>${activeLabel} · ${rotateTotal}° · ${scalePercent}%</small>
+          </button>
         `;
       })
       .join("");
 
     pageList.innerHTML = html;
+  }
+
+  function renderPageModePanelControls() {
+    const selectedId = state.selectedPageId;
+    const selected = selectedId ? state.pagesById.get(selectedId) : null;
+    if (!selected) {
+      selectedPageLabel.textContent = "No page selected";
+      panelPageUpBtn.disabled = true;
+      panelPageDownBtn.disabled = true;
+      panelPageScaleDownBtn.disabled = true;
+      panelPageScaleUpBtn.disabled = true;
+      panelPageRotateBtn.disabled = true;
+      panelPageDeleteBtn.disabled = true;
+      panelPageDeleteBtn.textContent = "Delete";
+      return;
+    }
+
+    const orderIndex = state.pageOrder.indexOf(selectedId);
+    panelPageUpBtn.dataset.pageId = selectedId;
+    panelPageDownBtn.dataset.pageId = selectedId;
+    panelPageScaleDownBtn.dataset.pageId = selectedId;
+    panelPageScaleUpBtn.dataset.pageId = selectedId;
+    panelPageRotateBtn.dataset.pageId = selectedId;
+    panelPageDeleteBtn.dataset.pageId = selectedId;
+
+    panelPageUpBtn.disabled = selected.deleted || orderIndex <= 0;
+    panelPageDownBtn.disabled =
+      selected.deleted || orderIndex === -1 || orderIndex >= state.pageOrder.length - 1;
+    panelPageScaleDownBtn.disabled = selected.deleted || selected.scale <= 0.25;
+    panelPageScaleUpBtn.disabled = selected.deleted || selected.scale >= 2;
+    panelPageRotateBtn.disabled = selected.deleted;
+    panelPageDeleteBtn.disabled = !selected.deleted && getActivePageIds().length <= 1;
+    panelPageDeleteBtn.textContent = selected.deleted ? "Restore" : "Delete";
+
+    const outputIndex = getActiveIndexForPageId(selectedId);
+    const outputLabel = selected.deleted ? "deleted" : `output #${outputIndex + 1}`;
+    selectedPageLabel.textContent =
+      `Selected: source ${selected.sourcePageNumber} (${outputLabel}, ${Math.round(
+        selected.scale * 100
+      )}%)`;
   }
 
   function renderTextList() {
@@ -1176,6 +1355,18 @@
 
   function normalizeCurrentPageIndex() {
     setCurrentPageActiveIndex(state.currentPageActiveIndex);
+  }
+
+  function ensureSelectedPageId() {
+    if (state.selectedPageId && state.pagesById.has(state.selectedPageId)) {
+      return;
+    }
+    const current = getCurrentPageId();
+    if (current) {
+      state.selectedPageId = current;
+      return;
+    }
+    state.selectedPageId = state.pageOrder[0] || "";
   }
 
   function getActivePageIds() {

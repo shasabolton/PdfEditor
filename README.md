@@ -37,12 +37,15 @@ The editor is intended to support this workflow:
 - PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
 - Includes **Open In Browser** fallback button.
 - Page-by-page navigation (`Prev` / `Next`).
+- Vertical all-pages preview stack is rendered below the main viewer so you can scroll through pages.
 
 ### Page operations
 
-- **Shuffle pages:** move page up/down in output order.
-- **Rotate:** per-page `-90` / `+90`.
-- **Resize:** per-page scale slider (`25%` to `200%`).
+- **Page Mode panel (top):** click **Page Mode** to open a sparse page strip and action row.
+- **Select page:** click a page chip in the panel or a page in the all-pages stack.
+- **Shuffle pages:** move selected page up/down in output order.
+- **Resize:** selected page `Scale-` / `Scale+` controls (`25%` to `200%`).
+- **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
 - Structural edits are always applied in saved output PDF.
 
