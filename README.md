@@ -36,19 +36,19 @@ The editor is intended to support this workflow:
 - Open local PDF with file picker.
 - PDF preview is rendered directly in app on a `<canvas>` (not dependent on browser native PDF iframe support).
 - Includes **Open In Browser** fallback button.
-- Page-by-page navigation (`Prev` / `Next`).
 - Vertical all-pages preview stack is rendered below the main viewer so you can scroll through pages.
 
 ### Page operations
 
-- **Page Mode panel (top):** click **Page Mode** to open a sparse page strip and action row.
-- **Select page:** click a page chip in the panel or a page in the all-pages stack.
+- **Single Mode selector:** choose `View`, `Pages`, `Draw`, or `Text` from top toolbar.
+- **Mode tool panel:** when a non-view mode is selected, dedicated controls appear directly under the mode dropdown in the top sticky toolbar.
+- **Select page:** click a page in the all-pages stack.
 - **Shuffle pages:** move selected page up/down in output order.
 - **Resize:** selected page `Scale-` / `Scale+` controls (`25%` to `200%`).
 - **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
-- In Page Mode, the separate active viewer is hidden and selection/edit context is shown directly in the scrolled page stack.
-- Active page is highlighted with a **red border**.
+- In any edit mode, the editable page window is shown **inline in place of that page card** (not in a separate top panel).
+- Active editable page is highlighted with a **red border**.
 - Structural edits are always applied in saved output PDF.
 
 ### Drawing + text
@@ -68,8 +68,8 @@ The editor is intended to support this workflow:
 
 ### Layout + navigation UX
 
-- Top controls are sticky so page tools remain visible while scrolling.
-- Added zoom out/in controls to change page preview density and close-up detail level.
+- Top controls are sticky so tools remain visible while scrolling.
+- Zoom can be set from the top zoom picker and adjusted via mouse wheel over the inline edit window.
 
 ---
 

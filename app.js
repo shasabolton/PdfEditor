@@ -4,34 +4,14 @@
   const fileInput = document.getElementById("fileInput");
   const saveBtn = document.getElementById("saveBtn");
   const openExternalBtn = document.getElementById("openExternalBtn");
-  const prevPageBtn = document.getElementById("prevPageBtn");
-  const nextPageBtn = document.getElementById("nextPageBtn");
-  const zoomOutBtn = document.getElementById("zoomOutBtn");
-  const zoomInBtn = document.getElementById("zoomInBtn");
-  const zoomLabel = document.getElementById("zoomLabel");
-  const pageModeBtn = document.getElementById("pageModeBtn");
   const modeSelect = document.getElementById("modeSelect");
-  const colorInput = document.getElementById("colorInput");
-  const sizeInput = document.getElementById("sizeInput");
-  const clearMarksBtn = document.getElementById("clearMarksBtn");
-  const addCenteredTextBtn = document.getElementById("addCenteredTextBtn");
-  const pageIndicator = document.getElementById("pageIndicator");
+  const zoomSelect = document.getElementById("zoomSelect");
+  const modeToolPanel = document.getElementById("modeToolPanel");
   const statusText = document.getElementById("statusText");
   const downloadFallback = document.getElementById("downloadFallback");
   const downloadFallbackLink = document.getElementById("downloadFallbackLink");
   const openSavedBtn = document.getElementById("openSavedBtn");
-  const pageEditPanel = document.getElementById("pageEditPanel");
-  const selectedPageLabel = document.getElementById("selectedPageLabel");
-  const panelPageUpBtn = document.getElementById("panelPageUpBtn");
-  const panelPageDownBtn = document.getElementById("panelPageDownBtn");
-  const panelPageScaleDownBtn = document.getElementById("panelPageScaleDownBtn");
-  const panelPageScaleUpBtn = document.getElementById("panelPageScaleUpBtn");
-  const panelPageRotateBtn = document.getElementById("panelPageRotateBtn");
-  const panelPageDeleteBtn = document.getElementById("panelPageDeleteBtn");
-  const pageList = document.getElementById("pageList");
   const allPagesScroll = document.getElementById("allPagesScroll");
-  const textList = document.getElementById("textList");
-  const textEditorBlock = document.getElementById("textEditorBlock");
   const viewerContainer = document.getElementById("viewerContainer");
   const pdfCanvas = document.getElementById("pdfCanvas");
   const pdfCtx = pdfCanvas.getContext("2d");
@@ -58,10 +38,11 @@
     parsed: null,
     canEdit: false,
     editMode: "",
-    pageMode: false,
     selectedPageId: "",
     allPagesRenderToken: 0,
     pageZoom: 1,
+    toolColor: "#d02626",
+    toolSize: 4,
     lastSavedUrl: "",
     lastSavedName: "",
     pageOrder: [],
@@ -86,43 +67,22 @@
     saveBtn.addEventListener("click", onSaveClick);
     openExternalBtn.addEventListener("click", onOpenExternalClick);
     openSavedBtn.addEventListener("click", onOpenSavedClick);
-    pageModeBtn.addEventListener("click", () => {
-      state.pageMode = !state.pageMode;
-      if (state.pageMode) {
-        state.mode = "view";
-      }
-      renderEverything();
-    });
-    zoomOutBtn.addEventListener("click", () => {
-      state.pageZoom = Math.max(0.5, Number((state.pageZoom - 0.15).toFixed(2)));
-      renderEverything();
-    });
-    zoomInBtn.addEventListener("click", () => {
-      state.pageZoom = Math.min(2.5, Number((state.pageZoom + 0.15).toFixed(2)));
-      renderEverything();
-    });
-    prevPageBtn.addEventListener("click", () => {
-      setCurrentPageActiveIndex(state.currentPageActiveIndex - 1);
-      state.selectedPageId = getCurrentPageId();
-      renderEverything();
-    });
-    nextPageBtn.addEventListener("click", () => {
-      setCurrentPageActiveIndex(state.currentPageActiveIndex + 1);
-      state.selectedPageId = getCurrentPageId();
-      renderEverything();
-    });
     modeSelect.addEventListener("change", () => {
       state.mode = modeSelect.value;
-      updateOverlayInteractivity();
-      drawOverlay();
+      renderEverything();
     });
-    clearMarksBtn.addEventListener("click", clearCurrentPageMarks);
-    addCenteredTextBtn.addEventListener("click", addCenteredText);
+    zoomSelect.addEventListener("change", () => {
+      const zoom = Number(zoomSelect.value);
+      if (Number.isFinite(zoom)) {
+        state.pageZoom = Math.max(0.5, Math.min(2.5, zoom));
+        renderEverything();
+      }
+    });
 
-    pageEditPanel.addEventListener("click", onPageListClick);
+    modeToolPanel.addEventListener("click", onModeToolPanelClick);
+    modeToolPanel.addEventListener("input", onModeToolPanelInput);
     allPagesScroll.addEventListener("click", onAllPagesScrollClick);
-
-    textList.addEventListener("click", onTextListClick);
+    viewerContainer.addEventListener("wheel", onViewerWheelZoom, { passive: false });
 
     overlayCanvas.addEventListener("pointerdown", onOverlayPointerDown);
     overlayCanvas.addEventListener("pointermove", onOverlayPointerMove);
@@ -131,7 +91,6 @@
 
     window.addEventListener("resize", () => {
       resizeOverlayCanvas();
-      renderCurrentPdfPage();
       renderAllPagesScroll();
     });
   }
@@ -392,7 +351,7 @@
       texts: [],
     });
     drawOverlay();
-    renderTextList();
+    renderModeToolPanel();
     setStatus("Cleared drawing/text marks on current page.", "ok");
   }
 
@@ -407,12 +366,12 @@
     }
 
     const canvasSize = getRenderCssSize();
-    const sizePx = Math.max(10, Number(sizeInput.value) * 3);
+    const sizePx = Math.max(10, getToolSize() * 3);
     const textItem = {
       x: 0.5,
       y: 0.5,
       sizeNorm: sizePx / canvasSize.height,
-      color: colorInput.value,
+      color: getToolColor(),
       text: content,
       widthNorm: estimateTextWidthNorm(content, sizePx, canvasSize.width),
       heightNorm: estimateTextHeightNorm(sizePx, canvasSize.height),
@@ -420,7 +379,7 @@
     const marks = getOrCreatePageAnnotations(pageId);
     marks.texts.push(textItem);
     drawOverlay();
-    renderTextList();
+    renderModeToolPanel();
     setStatus("Added text annotation.", "ok");
   }
 
@@ -490,17 +449,15 @@
         return;
       }
       page.deleted = !page.deleted;
-      state.selectedPageId = pageId;
       if (page.deleted) {
-        const idx = getActiveIndexForPageId(pageId);
-        if (idx >= 0) {
-          state.currentPageActiveIndex = idx;
-        }
+        const activeIds = getActivePageIds();
+        state.selectedPageId = activeIds[0] || "";
       } else {
-        const idx = getActiveIndexForPageId(pageId);
-        if (idx >= 0) {
-          state.currentPageActiveIndex = idx;
-        }
+        state.selectedPageId = pageId;
+      }
+      const idx = getActiveIndexForPageId(state.selectedPageId);
+      if (idx >= 0) {
+        state.currentPageActiveIndex = idx;
       }
       normalizeCurrentPageIndex();
       renderEverything();
@@ -521,8 +478,8 @@
     const idx = getActiveIndexForPageId(pageId);
     if (idx >= 0) {
       state.currentPageActiveIndex = idx;
-      renderEverything();
     }
+    renderEverything();
   }
 
   function onTextListClick(event) {
@@ -552,7 +509,7 @@
       const sizePx = Math.max(8, textItem.sizeNorm * canvasSize.height);
       textItem.widthNorm = estimateTextWidthNorm(next, sizePx, canvasSize.width);
       drawOverlay();
-      renderTextList();
+      renderModeToolPanel();
       setStatus("Updated text.", "ok");
       return;
     }
@@ -560,7 +517,7 @@
     if (action === "text-delete") {
       marks.texts.splice(textIndex, 1);
       drawOverlay();
-      renderTextList();
+      renderModeToolPanel();
       setStatus("Deleted text item.", "ok");
       return;
     }
@@ -577,7 +534,7 @@
       );
       textItem.heightNorm = estimateTextHeightNorm(sizePx, canvasSize.height);
       drawOverlay();
-      renderTextList();
+      renderModeToolPanel();
       return;
     }
   }
@@ -595,10 +552,10 @@
       if (!point) {
         return;
       }
-      const widthNorm = Number(sizeInput.value) / Math.max(1, getRenderCssSize().width);
+      const widthNorm = getToolSize() / Math.max(1, getRenderCssSize().width);
       state.drawing.pointerId = event.pointerId;
       state.drawing.currentStroke = {
-        color: colorInput.value,
+        color: getToolColor(),
         widthNorm: Math.max(0.001, widthNorm),
         points: [point],
       };
@@ -617,19 +574,19 @@
         return;
       }
       const canvasSize = getRenderCssSize();
-      const sizePx = Math.max(10, Number(sizeInput.value) * 3);
+      const sizePx = Math.max(10, getToolSize() * 3);
       const marks = getOrCreatePageAnnotations(pageId);
       marks.texts.push({
         x: point.x,
         y: point.y,
         sizeNorm: sizePx / canvasSize.height,
-        color: colorInput.value,
+        color: getToolColor(),
         text,
         widthNorm: estimateTextWidthNorm(text, sizePx, canvasSize.width),
         heightNorm: estimateTextHeightNorm(sizePx, canvasSize.height),
       });
       drawOverlay();
-      renderTextList();
+      renderModeToolPanel();
       setStatus("Placed text annotation.", "ok");
     }
   }
@@ -756,7 +713,6 @@
     state.parsed = null;
     state.canEdit = false;
     state.editMode = "";
-    state.pageMode = false;
     state.selectedPageId = "";
     state.allPagesRenderToken += 1;
     state.pageZoom = 1;
@@ -782,9 +738,9 @@
 
   function renderEverything() {
     const editable = state.canEdit && !!state.parsed;
-    const previewCount = getPreviewPageCount();
-    const showMainViewer = !editable || !state.pageMode;
-    const annotationEditingEnabled = editable && !state.pageMode;
+    if (!editable && state.mode !== "view") {
+      state.mode = "view";
+    }
     normalizeCurrentPageIndex();
     ensureSelectedPageId();
     updateSavedDownloadUI();
@@ -792,30 +748,16 @@
     saveBtn.disabled = !editable;
     openExternalBtn.disabled = !state.sourceUrl;
     openSavedBtn.disabled = !state.lastSavedUrl;
-    pageModeBtn.disabled = !editable;
-    pageModeBtn.classList.toggle("active", state.pageMode && editable);
-    zoomOutBtn.disabled = !state.previewDoc || state.pageZoom <= 0.5;
-    zoomInBtn.disabled = !state.previewDoc || state.pageZoom >= 2.5;
-    zoomLabel.textContent = `${Math.round(state.pageZoom * 100)}%`;
-    prevPageBtn.disabled = previewCount < 2 || state.currentPageActiveIndex <= 0;
-    nextPageBtn.disabled =
-      previewCount < 2 || state.currentPageActiveIndex >= previewCount - 1;
-    modeSelect.disabled = !annotationEditingEnabled;
-    colorInput.disabled = !annotationEditingEnabled;
-    sizeInput.disabled = !annotationEditingEnabled;
-    clearMarksBtn.disabled = !annotationEditingEnabled;
-    addCenteredTextBtn.disabled = !annotationEditingEnabled;
+    modeSelect.disabled = !editable;
+    zoomSelect.disabled = !state.previewDoc;
     modeSelect.value = state.mode;
-    viewerContainer.classList.toggle("ui-hidden", !showMainViewer);
-    viewerContainer.classList.toggle("active-edit", editable && showMainViewer);
-    textEditorBlock.classList.toggle("ui-hidden", state.pageMode);
+    setZoomSelectValue(state.pageZoom);
+    viewerContainer.classList.add("ui-hidden");
+    modeToolPanel.classList.toggle("hidden", !editable || state.mode === "view");
+    renderModeToolPanel();
 
     if (!state.sourceUrl) {
-      pageIndicator.textContent = "No file loaded";
-      pageList.innerHTML = "";
       allPagesScroll.innerHTML = "";
-      textList.innerHTML = "";
-      pageEditPanel.classList.add("hidden");
       updateOverlayInteractivity();
       clearPdfCanvas();
       drawOverlay();
@@ -823,54 +765,181 @@
     }
 
     if (!editable) {
-      pageList.innerHTML =
-        '<div class="pages-help">View-only mode: this PDF can be previewed, but the local writer cannot save edits for this file.</div>';
-      pageEditPanel.classList.add("hidden");
-      textList.innerHTML = "";
-    } else {
-      renderPageList();
-      renderPageModePanelControls();
-      renderTextList();
-      pageEditPanel.classList.toggle("hidden", !state.pageMode);
+      modeToolPanel.classList.add("hidden");
     }
 
-    renderPageIndicator();
     updateOverlayInteractivity();
-    if (showMainViewer) {
-      renderCurrentPdfPage();
-    } else {
-      clearPdfCanvas();
-      state.renderBox = {
-        left: 0,
-        top: 0,
-        width: 0,
-        height: 0,
-      };
-      drawOverlay();
-    }
     renderAllPagesScroll();
   }
 
-  function renderPageIndicator() {
-    const previewCount = getPreviewPageCount();
-    if (!previewCount) {
-      pageIndicator.textContent = "No preview pages";
+  function setZoomSelectValue(zoom) {
+    if (!zoomSelect) {
       return;
     }
-    const viewPageNumber = state.currentPageActiveIndex + 1;
-    if (!state.canEdit || !state.parsed) {
-      pageIndicator.textContent = `Page ${viewPageNumber} / ${previewCount}`;
+    let closestValue = zoomSelect.options[0] ? Number(zoomSelect.options[0].value) : 1;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const option of zoomSelect.options) {
+      const optionValue = Number(option.value);
+      const distance = Math.abs(optionValue - zoom);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestValue = optionValue;
+      }
+    }
+    zoomSelect.value = String(closestValue);
+  }
+
+  function renderModeToolPanel() {
+    if (!modeToolPanel) {
       return;
     }
-    const currentId = getCurrentPageId();
-    const page = currentId ? state.pagesById.get(currentId) : null;
+    if (!state.canEdit || !state.parsed || state.mode === "view") {
+      modeToolPanel.innerHTML = "";
+      return;
+    }
+
+    const selectedId = state.selectedPageId || getCurrentPageId();
+    const pageId = state.mode === "pages" ? selectedId : getCurrentPageId();
+    const page = pageId ? state.pagesById.get(pageId) : null;
     if (!page) {
-      pageIndicator.textContent = `Output page ${viewPageNumber} / ${previewCount}`;
+      modeToolPanel.innerHTML =
+        '<div class="pages-help">No active page available for this mode.</div>';
       return;
     }
-    pageIndicator.textContent =
-      `Output page ${viewPageNumber} / ${previewCount} ` +
-      `(source page ${page.sourcePageNumber})`;
+
+    if (state.mode === "pages") {
+      const idx = state.pageOrder.indexOf(pageId);
+      const outputIdx = getActiveIndexForPageId(pageId);
+      const canMoveUp = !page.deleted && idx > 0;
+      const canMoveDown = !page.deleted && idx >= 0 && idx < state.pageOrder.length - 1;
+      const canDelete = page.deleted || getActivePageIds().length > 1;
+      modeToolPanel.innerHTML = `
+        <div class="mode-tools-row">
+          <strong>Source ${page.sourcePageNumber} · ${
+        page.deleted ? "Deleted" : `Output ${outputIdx + 1}`
+      } · ${Math.round(
+        page.scale * 100
+      )}%</strong>
+          <button type="button" data-action="up" data-page-id="${pageId}" ${
+        canMoveUp ? "" : "disabled"
+      }>Up</button>
+          <button type="button" data-action="down" data-page-id="${pageId}" ${
+        canMoveDown ? "" : "disabled"
+      }>Down</button>
+          <button type="button" data-action="rotate-right" data-page-id="${pageId}" ${
+        page.deleted ? "disabled" : ""
+      }>+90</button>
+          <button type="button" data-action="scale-down" data-page-id="${pageId}" ${
+        page.scale <= 0.25 ? "disabled" : ""
+      }>Scale-</button>
+          <button type="button" data-action="scale-up" data-page-id="${pageId}" ${
+        page.scale >= 2 ? "disabled" : ""
+      }>Scale+</button>
+          <button type="button" class="danger" data-action="delete-toggle" data-page-id="${pageId}" ${
+        canDelete ? "" : "disabled"
+      }>${page.deleted ? "Restore" : "Delete"}</button>
+        </div>
+      `;
+      return;
+    }
+
+    if (state.mode === "draw") {
+      modeToolPanel.innerHTML = `
+        <div class="mode-tools-row">
+          <label for="toolColorInput">Color</label>
+          <input id="toolColorInput" type="color" value="${escapeHtml(getToolColor())}">
+          <label for="toolSizeInput">Size</label>
+          <input id="toolSizeInput" type="range" min="1" max="24" step="1" value="${getToolSize()}">
+          <button type="button" data-action="clear-marks">Clear Page Draw/Text</button>
+        </div>
+      `;
+      return;
+    }
+
+    if (state.mode === "text") {
+      const marks = state.annotationsByPage.get(pageId);
+      const textItems = marks && marks.texts ? marks.texts : [];
+      const listHtml = textItems.length
+        ? textItems
+            .map((item, index) => {
+              const preview = escapeHtml(item.text).slice(0, 80);
+              return `
+                <div class="text-item">
+                  <div class="text-item-head">#${index + 1}: ${preview || "(empty)"}</div>
+                  <div class="text-item-actions">
+                    <button type="button" data-action="text-edit" data-page-id="${pageId}" data-text-index="${index}">Edit</button>
+                    <button type="button" data-action="text-size-minus" data-page-id="${pageId}" data-text-index="${index}">A-</button>
+                    <button type="button" data-action="text-size-plus" data-page-id="${pageId}" data-text-index="${index}">A+</button>
+                    <button type="button" class="danger" data-action="text-delete" data-page-id="${pageId}" data-text-index="${index}">Delete</button>
+                  </div>
+                </div>
+              `;
+            })
+            .join("")
+        : '<div class="pages-help">No text items on this page.</div>';
+      modeToolPanel.innerHTML = `
+        <div class="mode-tools-row">
+          <label for="toolColorInput">Color</label>
+          <input id="toolColorInput" type="color" value="${escapeHtml(getToolColor())}">
+          <label for="toolSizeInput">Size</label>
+          <input id="toolSizeInput" type="range" min="1" max="24" step="1" value="${getToolSize()}">
+          <button type="button" data-action="add-centered-text">Add Centered Text</button>
+          <button type="button" data-action="clear-marks">Clear Page Draw/Text</button>
+        </div>
+        <div class="mode-tools-list">${listHtml}</div>
+      `;
+    }
+  }
+
+  function onModeToolPanelClick(event) {
+    const button = event.target.closest("button[data-action]");
+    if (!button) {
+      return;
+    }
+    const action = button.dataset.action || "";
+    if (action === "clear-marks") {
+      clearCurrentPageMarks();
+      return;
+    }
+    if (action === "add-centered-text") {
+      addCenteredText();
+      return;
+    }
+    if (action.startsWith("text-")) {
+      onTextListClick(event);
+      return;
+    }
+    onPageListClick(event);
+  }
+
+  function onModeToolPanelInput(event) {
+    const colorEl = event.target.closest("#toolColorInput");
+    if (colorEl) {
+      state.toolColor = colorEl.value || "#d02626";
+      drawOverlay();
+      return;
+    }
+    const sizeEl = event.target.closest("#toolSizeInput");
+    if (sizeEl) {
+      const value = Number(sizeEl.value);
+      state.toolSize = Number.isFinite(value) ? value : 4;
+      drawOverlay();
+    }
+  }
+
+  function onViewerWheelZoom(event) {
+    if (!state.canEdit || !state.parsed || state.mode === "view") {
+      return;
+    }
+    event.preventDefault();
+    applyWheelZoom(event.deltaY);
+  }
+
+  function applyWheelZoom(deltaY) {
+    const direction = deltaY > 0 ? -1 : 1;
+    const next = state.pageZoom + direction * 0.1;
+    state.pageZoom = Math.max(0.5, Math.min(2.5, Number(next.toFixed(2))));
+    renderEverything();
   }
 
   async function renderCurrentPdfPage() {
@@ -985,8 +1054,12 @@
     const items = [];
     if (state.canEdit && state.parsed) {
       const activeIds = getActivePageIds();
+      const activeIndexMap = new Map();
       for (let i = 0; i < activeIds.length; i += 1) {
-        const id = activeIds[i];
+        activeIndexMap.set(activeIds[i], i + 1);
+      }
+      for (let i = 0; i < state.pageOrder.length; i += 1) {
+        const id = state.pageOrder[i];
         const page = state.pagesById.get(id);
         if (!page) {
           continue;
@@ -997,7 +1070,10 @@
           pageNumber: page.sourcePageNumber,
           rotateDelta: page.rotateDelta,
           scale: page.scale,
-          label: `Output ${i + 1} · Source ${page.sourcePageNumber}`,
+          deleted: !!page.deleted,
+          label: page.deleted
+            ? `Deleted · Source ${page.sourcePageNumber}`
+            : `Output ${activeIndexMap.get(id) || "-"} · Source ${page.sourcePageNumber}`,
           selected: id === state.selectedPageId,
         });
       }
@@ -1019,8 +1095,19 @@
     if (!items.length) {
       allPagesScroll.innerHTML =
         '<div class="pages-help">No pages to preview.</div>';
+      viewerContainer.classList.add("ui-hidden");
       return;
     }
+
+    const selectedPage = state.selectedPageId ? state.pagesById.get(state.selectedPageId) : null;
+    const inlineEditPageId =
+      state.canEdit &&
+      state.parsed &&
+      state.mode !== "view" &&
+      selectedPage &&
+      !selectedPage.deleted
+        ? state.selectedPageId
+        : "";
 
     allPagesScroll.innerHTML = items
       .map((item) => {
@@ -1028,20 +1115,51 @@
         if (item.selected) {
           classes.push("selected");
         }
+        if (item.deleted) {
+          classes.push("deleted");
+        }
+        const hasInlineEditor = !!inlineEditPageId && item.pageId === inlineEditPageId;
         return `
           <article class="${classes.join(" ")}" data-page-id="${item.pageId}">
             <div class="all-page-head">${item.label}</div>
-            <canvas class="all-page-canvas" data-canvas-key="${item.key}"></canvas>
+            ${
+              hasInlineEditor
+                ? `<div class="inline-editor-host" data-inline-editor-page-id="${item.pageId}"></div>`
+                : `<canvas class="all-page-canvas" data-canvas-key="${item.key}"></canvas>`
+            }
           </article>
         `;
       })
       .join("");
+
+    if (inlineEditPageId) {
+      const host = allPagesScroll.querySelector(
+        `[data-inline-editor-page-id="${inlineEditPageId}"]`
+      );
+      if (host) {
+        host.appendChild(viewerContainer);
+        viewerContainer.classList.remove("ui-hidden");
+        await renderCurrentPdfPage();
+      }
+    } else {
+      viewerContainer.classList.add("ui-hidden");
+      state.renderBox = {
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      };
+      drawOverlay();
+    }
 
     const baseWidth = Math.max(180, Math.min(760, allPagesScroll.clientWidth - 24));
     const maxWidth = Math.max(120, baseWidth * state.pageZoom);
     for (const item of items) {
       if (token !== state.allPagesRenderToken) {
         return;
+      }
+      if (inlineEditPageId && item.pageId === inlineEditPageId) {
+        continue;
       }
       const canvas = allPagesScroll.querySelector(
         `canvas[data-canvas-key="${item.key}"]`
@@ -1084,123 +1202,6 @@
       viewport,
     });
     await task.promise;
-  }
-
-  function renderPageList() {
-    const currentId = getCurrentPageId();
-    const selectedId = state.selectedPageId;
-    const activeIds = getActivePageIds();
-    const activeIndexMap = new Map();
-    for (let i = 0; i < activeIds.length; i += 1) {
-      activeIndexMap.set(activeIds[i], i + 1);
-    }
-
-    const html = state.pageOrder
-      .map((id) => {
-        const page = state.pagesById.get(id);
-        if (!page) {
-          return "";
-        }
-        const isSelected = id === selectedId;
-        const classes = ["page-chip"];
-        if (isSelected) {
-          classes.push("selected");
-        }
-        if (id === currentId) {
-          classes.push("current");
-        }
-        if (page.deleted) {
-          classes.push("deleted");
-        }
-
-        const activeLabel = page.deleted
-          ? "deleted"
-          : `#${activeIndexMap.get(id) || "-"}`;
-        const rotateTotal = normalizeRotation(page.baseRotate + page.rotateDelta);
-        const scalePercent = Math.round(page.scale * 100);
-
-        return `
-          <button type="button" class="${classes.join(" ")}" data-action="select" data-page-id="${id}">
-            <span>Page ${page.sourcePageNumber}</span>
-            <small>${activeLabel} · ${rotateTotal}° · ${scalePercent}%</small>
-          </button>
-        `;
-      })
-      .join("");
-
-    pageList.innerHTML = html;
-  }
-
-  function renderPageModePanelControls() {
-    const selectedId = state.selectedPageId;
-    const selected = selectedId ? state.pagesById.get(selectedId) : null;
-    if (!selected) {
-      selectedPageLabel.textContent = "No page selected";
-      panelPageUpBtn.disabled = true;
-      panelPageDownBtn.disabled = true;
-      panelPageScaleDownBtn.disabled = true;
-      panelPageScaleUpBtn.disabled = true;
-      panelPageRotateBtn.disabled = true;
-      panelPageDeleteBtn.disabled = true;
-      panelPageDeleteBtn.textContent = "Delete";
-      return;
-    }
-
-    const orderIndex = state.pageOrder.indexOf(selectedId);
-    panelPageUpBtn.dataset.pageId = selectedId;
-    panelPageDownBtn.dataset.pageId = selectedId;
-    panelPageScaleDownBtn.dataset.pageId = selectedId;
-    panelPageScaleUpBtn.dataset.pageId = selectedId;
-    panelPageRotateBtn.dataset.pageId = selectedId;
-    panelPageDeleteBtn.dataset.pageId = selectedId;
-
-    panelPageUpBtn.disabled = selected.deleted || orderIndex <= 0;
-    panelPageDownBtn.disabled =
-      selected.deleted || orderIndex === -1 || orderIndex >= state.pageOrder.length - 1;
-    panelPageScaleDownBtn.disabled = selected.deleted || selected.scale <= 0.25;
-    panelPageScaleUpBtn.disabled = selected.deleted || selected.scale >= 2;
-    panelPageRotateBtn.disabled = selected.deleted;
-    panelPageDeleteBtn.disabled = !selected.deleted && getActivePageIds().length <= 1;
-    panelPageDeleteBtn.textContent = selected.deleted ? "Restore" : "Delete";
-
-    const outputIndex = getActiveIndexForPageId(selectedId);
-    const outputLabel = selected.deleted ? "deleted" : `output #${outputIndex + 1}`;
-    selectedPageLabel.textContent =
-      `Selected: source ${selected.sourcePageNumber} (${outputLabel}, ${Math.round(
-        selected.scale * 100
-      )}%)`;
-  }
-
-  function renderTextList() {
-    const pageId = getCurrentPageId();
-    if (!pageId) {
-      textList.innerHTML = "";
-      return;
-    }
-    const marks = state.annotationsByPage.get(pageId);
-    if (!marks || !marks.texts.length) {
-      textList.innerHTML =
-        '<div class="pages-help">No text items on this page. Use text mode or "Add Centered Text".</div>';
-      return;
-    }
-
-    textList.innerHTML = marks.texts
-      .map((item, index) => {
-        const preview = escapeHtml(item.text).slice(0, 120);
-        const sizePx = Math.round(item.sizeNorm * getRenderCssSize().height);
-        return `
-          <div class="text-item">
-            <div class="text-item-head">#${index + 1}: ${preview || "(empty)"} | ${sizePx}px</div>
-            <div class="text-item-actions">
-              <button type="button" data-action="text-edit" data-page-id="${pageId}" data-text-index="${index}">Edit</button>
-              <button type="button" data-action="text-size-minus" data-page-id="${pageId}" data-text-index="${index}">A-</button>
-              <button type="button" data-action="text-size-plus" data-page-id="${pageId}" data-text-index="${index}">A+</button>
-              <button type="button" class="danger" data-action="text-delete" data-page-id="${pageId}" data-text-index="${index}">Delete</button>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
   }
 
   function clearPdfCanvas() {
@@ -1381,6 +1382,18 @@
     return getCanvasCssSize();
   }
 
+  function getToolColor() {
+    return state.toolColor || "#d02626";
+  }
+
+  function getToolSize() {
+    const parsed = Number(state.toolSize);
+    if (!Number.isFinite(parsed)) {
+      return 4;
+    }
+    return Math.max(1, Math.min(24, parsed));
+  }
+
   function setCurrentPageActiveIndex(next) {
     const count = getPreviewPageCount();
     if (!count) {
@@ -1399,14 +1412,18 @@
 
   function ensureSelectedPageId() {
     if (state.selectedPageId && state.pagesById.has(state.selectedPageId)) {
-      return;
+      const page = state.pagesById.get(state.selectedPageId);
+      if (page && !page.deleted) {
+        return;
+      }
     }
     const current = getCurrentPageId();
     if (current) {
       state.selectedPageId = current;
       return;
     }
-    state.selectedPageId = state.pageOrder[0] || "";
+    const active = getActivePageIds();
+    state.selectedPageId = active[0] || "";
   }
 
   function getActivePageIds() {
@@ -1419,6 +1436,12 @@
   function getCurrentPageId() {
     if (!state.canEdit || !state.parsed) {
       return "";
+    }
+    if (state.selectedPageId) {
+      const selected = state.pagesById.get(state.selectedPageId);
+      if (selected && !selected.deleted) {
+        return state.selectedPageId;
+      }
     }
     const activeIds = getActivePageIds();
     if (!activeIds.length) {

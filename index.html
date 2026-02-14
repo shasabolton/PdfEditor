@@ -8,58 +8,42 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>Vanilla PDF Editor</h1>
-    <div class="topbar-actions">
-      <label class="file-input-label">
-        <span>Open PDF</span>
-        <input id="fileInput" type="file" accept="application/pdf">
-      </label>
-      <button id="openExternalBtn" type="button" disabled>Open In Browser</button>
-      <button id="saveBtn" type="button" disabled>Save PDF</button>
-    </div>
-  </header>
-
-  <main class="app-shell">
-    <section class="viewer-section">
-      <div class="viewer-toolbar">
-        <button id="prevPageBtn" type="button" disabled>Prev</button>
-        <span id="pageIndicator">No file loaded</span>
-        <button id="nextPageBtn" type="button" disabled>Next</button>
-        <button id="zoomOutBtn" type="button" disabled>-</button>
-        <span id="zoomLabel">100%</span>
-        <button id="zoomInBtn" type="button" disabled>+</button>
-        <button id="pageModeBtn" type="button" disabled>Page Mode</button>
+    <div class="topbar-main">
+      <h1>Vanilla PDF Editor</h1>
+      <div class="topbar-actions">
+        <label class="file-input-label">
+          <span>Open PDF</span>
+          <input id="fileInput" type="file" accept="application/pdf">
+        </label>
+        <button id="saveBtn" type="button" disabled>Save PDF</button>
+        <button id="openExternalBtn" type="button" disabled>Open In Browser</button>
 
         <label for="modeSelect">Mode</label>
         <select id="modeSelect" disabled>
           <option value="view">View</option>
+          <option value="pages">Pages</option>
           <option value="draw">Draw</option>
           <option value="text">Text</option>
         </select>
 
-        <label for="colorInput">Color</label>
-        <input id="colorInput" type="color" value="#d02626" disabled>
-
-        <label for="sizeInput">Size</label>
-        <input id="sizeInput" type="range" min="1" max="24" step="1" value="4" disabled>
-
-        <button id="clearMarksBtn" type="button" disabled>Clear Page Draw/Text</button>
+        <label for="zoomSelect">Zoom</label>
+        <select id="zoomSelect" disabled>
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1" selected>100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200%</option>
+          <option value="2.5">250%</option>
+        </select>
       </div>
+    </div>
+    <div id="modeToolPanel" class="mode-tool-panel hidden"></div>
+  </header>
 
-      <div id="pageEditPanel" class="page-edit-panel hidden">
-        <div class="page-edit-actions">
-          <strong id="selectedPageLabel">No page selected</strong>
-          <button id="panelPageUpBtn" type="button" data-action="up">Up</button>
-          <button id="panelPageDownBtn" type="button" data-action="down">Down</button>
-          <button id="panelPageScaleDownBtn" type="button" data-action="scale-down">Scale-</button>
-          <button id="panelPageScaleUpBtn" type="button" data-action="scale-up">Scale+</button>
-          <button id="panelPageRotateBtn" type="button" data-action="rotate-right">+90</button>
-          <button id="panelPageDeleteBtn" type="button" class="danger" data-action="delete-toggle">Delete</button>
-        </div>
-        <div id="pageList" class="page-strip" aria-label="Page strip"></div>
-      </div>
-
-      <div id="viewerContainer">
+  <main class="app-shell">
+    <section class="viewer-section">
+      <div id="viewerContainer" class="ui-hidden">
         <canvas id="pdfCanvas" aria-label="PDF preview canvas"></canvas>
         <canvas id="overlayCanvas"></canvas>
       </div>
@@ -67,11 +51,6 @@
       <p class="viewer-help">
         Preview is rendered directly in-app. If a specific file still fails to display, tap <strong>Open In Browser</strong>.
       </p>
-
-      <div id="textEditorBlock" class="text-editor-block">
-        <button id="addCenteredTextBtn" type="button" disabled>Add Centered Text</button>
-        <div id="textList" aria-live="polite"></div>
-      </div>
 
       <p id="statusText">Load a PDF to begin.</p>
       <div id="downloadFallback" class="download-fallback hidden" aria-live="polite">
