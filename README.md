@@ -72,6 +72,7 @@ The editor is intended to support this workflow:
 - Top controls are sticky so tools remain visible while scrolling.
 - Zoom can be set from the top zoom picker (`10%` to `500%`) and adjusted via mouse wheel over the inline edit window.
 - Pages and the active edit window can flow side-by-side when there is horizontal space, then wrap to next row.
+- Main pages container supports panning via two-finger drag and middle-mouse click+drag.
 
 ---
 

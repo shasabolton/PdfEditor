@@ -13,6 +13,7 @@
   const downloadFallback = document.getElementById("downloadFallback");
   const downloadFallbackLink = document.getElementById("downloadFallbackLink");
   const openSavedBtn = document.getElementById("openSavedBtn");
+  const appShell = document.querySelector(".app-shell");
   const allPagesScroll = document.getElementById("allPagesScroll");
   const viewerContainer = document.getElementById("viewerContainer");
   const pdfCanvas = document.getElementById("pdfCanvas");
@@ -59,6 +60,14 @@
       pointerId: null,
       currentStroke: null,
     },
+    pan: {
+      middleActive: false,
+      lastMouseX: 0,
+      lastMouseY: 0,
+      touchPoints: new Map(),
+      touchActive: false,
+      lastTouchCenter: null,
+    },
   };
 
   configurePdfJs();
@@ -89,6 +98,13 @@
     modeToolPanel.addEventListener("input", onModeToolPanelInput);
     allPagesScroll.addEventListener("click", onAllPagesScrollClick);
     viewerContainer.addEventListener("wheel", onViewerWheelZoom, { passive: false });
+    if (appShell) {
+      appShell.addEventListener("mousedown", onAppShellMouseDown);
+      appShell.addEventListener("auxclick", onAppShellAuxClick);
+    }
+    window.addEventListener("mousemove", onWindowMouseMovePan);
+    window.addEventListener("mouseup", onWindowMouseUpPan);
+    window.addEventListener("blur", stopMiddlePan);
 
     overlayCanvas.addEventListener("pointerdown", onOverlayPointerDown);
     overlayCanvas.addEventListener("pointermove", onOverlayPointerMove);
@@ -612,6 +628,9 @@
   }
 
   function onOverlayPointerDown(event) {
+    if (handleTouchPanPointerDown(event)) {
+      return;
+    }
     if (!state.canEdit) {
       return;
     }
@@ -664,6 +683,9 @@
   }
 
   function onOverlayPointerMove(event) {
+    if (handleTouchPanPointerMove(event)) {
+      return;
+    }
     if (state.mode !== "draw") {
       return;
     }
@@ -679,6 +701,9 @@
   }
 
   function onOverlayPointerUp(event) {
+    if (handleTouchPanPointerUp(event)) {
+      return;
+    }
     if (state.mode !== "draw") {
       return;
     }
@@ -702,6 +727,83 @@
     state.drawing.pointerId = null;
     state.drawing.currentStroke = null;
     drawOverlay();
+  }
+
+  function handleTouchPanPointerDown(event) {
+    if (event.pointerType !== "touch") {
+      return false;
+    }
+    state.pan.touchPoints.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (state.pan.touchPoints.size < 2) {
+      return false;
+    }
+    if (state.drawing.pointerId !== null) {
+      try {
+        overlayCanvas.releasePointerCapture(state.drawing.pointerId);
+      } catch (error) {
+        // Ignore release failures caused by browser differences.
+      }
+      state.drawing.pointerId = null;
+      state.drawing.currentStroke = null;
+    }
+    state.pan.touchActive = true;
+    state.pan.lastTouchCenter = getTouchCenter();
+    drawOverlay();
+    return true;
+  }
+
+  function handleTouchPanPointerMove(event) {
+    if (event.pointerType !== "touch") {
+      return false;
+    }
+    if (!state.pan.touchPoints.has(event.pointerId)) {
+      return false;
+    }
+    state.pan.touchPoints.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (state.pan.touchPoints.size < 2) {
+      return false;
+    }
+    const center = getTouchCenter();
+    if (!center) {
+      return false;
+    }
+    const previous = state.pan.lastTouchCenter || center;
+    panByDelta(center.x - previous.x, center.y - previous.y);
+    state.pan.touchActive = true;
+    state.pan.lastTouchCenter = center;
+    event.preventDefault();
+    return true;
+  }
+
+  function handleTouchPanPointerUp(event) {
+    if (event.pointerType !== "touch") {
+      return false;
+    }
+    const wasPanning =
+      state.pan.touchActive || state.pan.touchPoints.size >= 2;
+    state.pan.touchPoints.delete(event.pointerId);
+    if (state.pan.touchPoints.size < 2) {
+      state.pan.touchActive = false;
+      state.pan.lastTouchCenter = null;
+    }
+    return wasPanning;
+  }
+
+  function getTouchCenter() {
+    const points = Array.from(state.pan.touchPoints.values());
+    if (points.length < 2) {
+      return null;
+    }
+    return {
+      x: (points[0].x + points[1].x) / 2,
+      y: (points[0].y + points[1].y) / 2,
+    };
   }
 
   function getNormalizedPointerPoint(event) {
@@ -798,6 +900,10 @@
     state.mode = "view";
     state.drawing.pointerId = null;
     state.drawing.currentStroke = null;
+    state.pan.touchPoints.clear();
+    state.pan.touchActive = false;
+    state.pan.lastTouchCenter = null;
+    stopMiddlePan();
     state.renderBox = {
       left: 0,
       top: 0,
@@ -1078,11 +1184,62 @@
     applyWheelZoom(event.deltaY);
   }
 
+  function onAppShellMouseDown(event) {
+    if (event.button !== 1 || !appShell) {
+      return;
+    }
+    event.preventDefault();
+    state.pan.middleActive = true;
+    state.pan.lastMouseX = event.clientX;
+    state.pan.lastMouseY = event.clientY;
+    appShell.classList.add("panning");
+  }
+
+  function onAppShellAuxClick(event) {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }
+
+  function onWindowMouseMovePan(event) {
+    if (!state.pan.middleActive) {
+      return;
+    }
+    const dx = event.clientX - state.pan.lastMouseX;
+    const dy = event.clientY - state.pan.lastMouseY;
+    state.pan.lastMouseX = event.clientX;
+    state.pan.lastMouseY = event.clientY;
+    panByDelta(dx, dy);
+  }
+
+  function onWindowMouseUpPan(event) {
+    if (event.button !== 1) {
+      return;
+    }
+    stopMiddlePan();
+  }
+
+  function stopMiddlePan() {
+    state.pan.middleActive = false;
+    if (appShell) {
+      appShell.classList.remove("panning");
+    }
+  }
+
   function applyWheelZoom(deltaY) {
     const direction = deltaY > 0 ? -1 : 1;
     const next = state.pageZoom + direction * 0.08;
     state.pageZoom = Math.max(0.1, Math.min(5, Number(next.toFixed(2))));
     renderEverything();
+  }
+
+  function panByDelta(deltaX, deltaY) {
+    const target = appShell;
+    if (!target) {
+      return;
+    }
+    target.scrollLeft -= deltaX;
+    target.scrollTop -= deltaY;
   }
 
   async function renderCurrentPdfPage(targetWidth) {
@@ -1317,7 +1474,7 @@
     const rotation = normalizeRotation((page.rotate || 0) + (item.rotateDelta || 0));
     const baseViewport = page.getViewport({ scale: 1, rotation });
     const fitScale = targetWidth / Math.max(1, baseViewport.width);
-    const finalScale = Math.max(0.08, fitScale * Math.max(0.25, item.scale || 1));
+    const finalScale = Math.max(0.02, fitScale * Math.max(0.25, item.scale || 1));
     const viewport = page.getViewport({ scale: finalScale, rotation });
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const pixelWidth = Math.max(1, Math.floor(viewport.width * dpr));

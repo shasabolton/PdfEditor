@@ -172,6 +172,11 @@ button:not(:disabled),
   padding: 0.7rem;
 }
 
+.app-shell.panning,
+.app-shell.panning * {
+  cursor: grabbing !important;
+}
+
 .viewer-section {
   border: 1px solid var(--border);
   border-radius: 0.8rem;
