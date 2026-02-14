@@ -6,6 +6,9 @@
   const openExternalBtn = document.getElementById("openExternalBtn");
   const prevPageBtn = document.getElementById("prevPageBtn");
   const nextPageBtn = document.getElementById("nextPageBtn");
+  const zoomOutBtn = document.getElementById("zoomOutBtn");
+  const zoomInBtn = document.getElementById("zoomInBtn");
+  const zoomLabel = document.getElementById("zoomLabel");
   const pageModeBtn = document.getElementById("pageModeBtn");
   const modeSelect = document.getElementById("modeSelect");
   const colorInput = document.getElementById("colorInput");
@@ -28,6 +31,7 @@
   const pageList = document.getElementById("pageList");
   const allPagesScroll = document.getElementById("allPagesScroll");
   const textList = document.getElementById("textList");
+  const textEditorBlock = document.getElementById("textEditorBlock");
   const viewerContainer = document.getElementById("viewerContainer");
   const pdfCanvas = document.getElementById("pdfCanvas");
   const pdfCtx = pdfCanvas.getContext("2d");
@@ -57,6 +61,7 @@
     pageMode: false,
     selectedPageId: "",
     allPagesRenderToken: 0,
+    pageZoom: 1,
     lastSavedUrl: "",
     lastSavedName: "",
     pageOrder: [],
@@ -83,6 +88,17 @@
     openSavedBtn.addEventListener("click", onOpenSavedClick);
     pageModeBtn.addEventListener("click", () => {
       state.pageMode = !state.pageMode;
+      if (state.pageMode) {
+        state.mode = "view";
+      }
+      renderEverything();
+    });
+    zoomOutBtn.addEventListener("click", () => {
+      state.pageZoom = Math.max(0.5, Number((state.pageZoom - 0.15).toFixed(2)));
+      renderEverything();
+    });
+    zoomInBtn.addEventListener("click", () => {
+      state.pageZoom = Math.min(2.5, Number((state.pageZoom + 0.15).toFixed(2)));
       renderEverything();
     });
     prevPageBtn.addEventListener("click", () => {
@@ -743,6 +759,7 @@
     state.pageMode = false;
     state.selectedPageId = "";
     state.allPagesRenderToken += 1;
+    state.pageZoom = 1;
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
@@ -766,6 +783,8 @@
   function renderEverything() {
     const editable = state.canEdit && !!state.parsed;
     const previewCount = getPreviewPageCount();
+    const showMainViewer = !editable || !state.pageMode;
+    const annotationEditingEnabled = editable && !state.pageMode;
     normalizeCurrentPageIndex();
     ensureSelectedPageId();
     updateSavedDownloadUI();
@@ -775,15 +794,21 @@
     openSavedBtn.disabled = !state.lastSavedUrl;
     pageModeBtn.disabled = !editable;
     pageModeBtn.classList.toggle("active", state.pageMode && editable);
+    zoomOutBtn.disabled = !state.previewDoc || state.pageZoom <= 0.5;
+    zoomInBtn.disabled = !state.previewDoc || state.pageZoom >= 2.5;
+    zoomLabel.textContent = `${Math.round(state.pageZoom * 100)}%`;
     prevPageBtn.disabled = previewCount < 2 || state.currentPageActiveIndex <= 0;
     nextPageBtn.disabled =
       previewCount < 2 || state.currentPageActiveIndex >= previewCount - 1;
-    modeSelect.disabled = !editable;
-    colorInput.disabled = !editable;
-    sizeInput.disabled = !editable;
-    clearMarksBtn.disabled = !editable;
-    addCenteredTextBtn.disabled = !editable;
+    modeSelect.disabled = !annotationEditingEnabled;
+    colorInput.disabled = !annotationEditingEnabled;
+    sizeInput.disabled = !annotationEditingEnabled;
+    clearMarksBtn.disabled = !annotationEditingEnabled;
+    addCenteredTextBtn.disabled = !annotationEditingEnabled;
     modeSelect.value = state.mode;
+    viewerContainer.classList.toggle("ui-hidden", !showMainViewer);
+    viewerContainer.classList.toggle("active-edit", editable && showMainViewer);
+    textEditorBlock.classList.toggle("ui-hidden", state.pageMode);
 
     if (!state.sourceUrl) {
       pageIndicator.textContent = "No file loaded";
@@ -811,7 +836,18 @@
 
     renderPageIndicator();
     updateOverlayInteractivity();
-    renderCurrentPdfPage();
+    if (showMainViewer) {
+      renderCurrentPdfPage();
+    } else {
+      clearPdfCanvas();
+      state.renderBox = {
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      };
+      drawOverlay();
+    }
     renderAllPagesScroll();
   }
 
@@ -896,7 +932,10 @@
         cssWidth / Math.max(1, baseViewport.width),
         cssHeight / Math.max(1, baseViewport.height)
       );
-      const finalScale = Math.max(0.05, fitScale * Math.max(0.25, scaleMultiplier));
+      const finalScale = Math.max(
+        0.05,
+        fitScale * Math.max(0.25, scaleMultiplier) * state.pageZoom
+      );
       const viewport = page.getViewport({ scale: finalScale, rotation });
       const left = (cssWidth - viewport.width) / 2;
       const top = (cssHeight - viewport.height) / 2;
@@ -998,7 +1037,8 @@
       })
       .join("");
 
-    const maxWidth = Math.max(240, Math.min(820, allPagesScroll.clientWidth - 24));
+    const baseWidth = Math.max(180, Math.min(760, allPagesScroll.clientWidth - 24));
+    const maxWidth = Math.max(120, baseWidth * state.pageZoom);
     for (const item of items) {
       if (token !== state.allPagesRenderToken) {
         return;

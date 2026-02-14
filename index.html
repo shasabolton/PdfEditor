@@ -25,6 +25,9 @@
         <button id="prevPageBtn" type="button" disabled>Prev</button>
         <span id="pageIndicator">No file loaded</span>
         <button id="nextPageBtn" type="button" disabled>Next</button>
+        <button id="zoomOutBtn" type="button" disabled>-</button>
+        <span id="zoomLabel">100%</span>
+        <button id="zoomInBtn" type="button" disabled>+</button>
         <button id="pageModeBtn" type="button" disabled>Page Mode</button>
 
         <label for="modeSelect">Mode</label>
@@ -65,7 +68,7 @@
         Preview is rendered directly in-app. If a specific file still fails to display, tap <strong>Open In Browser</strong>.
       </p>
 
-      <div class="text-editor-block">
+      <div id="textEditorBlock" class="text-editor-block">
         <button id="addCenteredTextBtn" type="button" disabled>Add Centered Text</button>
         <div id="textList" aria-live="polite"></div>
       </div>

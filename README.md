@@ -47,6 +47,8 @@ The editor is intended to support this workflow:
 - **Resize:** selected page `Scale-` / `Scale+` controls (`25%` to `200%`).
 - **Rotate:** selected page `+90`.
 - **Delete/restore:** toggle page inclusion in output.
+- In Page Mode, the separate active viewer is hidden and selection/edit context is shown directly in the scrolled page stack.
+- Active page is highlighted with a **red border**.
 - Structural edits are always applied in saved output PDF.
 
 ### Drawing + text
@@ -63,6 +65,11 @@ The editor is intended to support this workflow:
 - Output PDF generation is done entirely in-browser using a local PDF editing library (no server).
 - If direct structural editing is not possible, app falls back to **compatibility raster mode** so editing/saving still works.
 - After save, app shows a persistent **Download Saved PDF** link/button fallback for mobile/webview environments that block automatic downloads.
+
+### Layout + navigation UX
+
+- Top controls are sticky so page tools remain visible while scrolling.
+- Added zoom out/in controls to change page preview density and close-up detail level.
 
 ---
 
