@@ -80,8 +80,14 @@
       lastTouchCenter: null,
       pinchStartDistance: 0,
       pinchStartZoom: 1,
-      pinchLastRenderAt: 0,
       pinchNeedsCommitRender: false,
+      pinchPreviewActive: false,
+      pinchPreviewSourceCanvas: null,
+      pinchPreviewBaseWidth: 0,
+      pinchPreviewBaseHeight: 0,
+      pinchPendingScale: 1,
+      pinchRafId: 0,
+      pinchRafTimeout: false,
     },
   };
 
@@ -1292,9 +1298,8 @@
     state.pan.lastTouchCenter = getTouchCenter();
     state.pan.pinchStartDistance = getTouchDistance() || 0;
     state.pan.pinchStartZoom = state.pageZoom;
-    state.pan.pinchLastRenderAt = 0;
     state.pan.pinchNeedsCommitRender = false;
-    drawOverlay();
+    beginPinchPreview();
     return true;
   }
 
@@ -1335,14 +1340,8 @@
         state.pan.pinchNeedsCommitRender = true;
         setZoomSelectValue(state.pageZoom);
         updatePageRadiusScale();
-        const now =
-          typeof performance !== "undefined" && typeof performance.now === "function"
-            ? performance.now()
-            : Date.now();
-        if (now - state.pan.pinchLastRenderAt >= 95) {
-          state.pan.pinchLastRenderAt = now;
-          renderCurrentPageForLiveZoom();
-        }
+        const scale = state.pageZoom / Math.max(0.1, state.pan.pinchStartZoom);
+        schedulePinchPreviewRender(scale);
       }
     }
     event.preventDefault();
@@ -1357,16 +1356,14 @@
       state.pan.touchActive || state.pan.touchPoints.size >= 2;
     state.pan.touchPoints.delete(event.pointerId);
     if (state.pan.touchPoints.size < 2) {
-      const shouldCommitRender = state.pan.pinchNeedsCommitRender;
+      const shouldCommitRender =
+        state.pan.pinchNeedsCommitRender || state.pan.pinchPreviewActive;
       state.pan.touchActive = false;
       state.pan.lastTouchCenter = null;
       state.pan.pinchStartDistance = 0;
       state.pan.pinchStartZoom = state.pageZoom;
-      state.pan.pinchLastRenderAt = 0;
       state.pan.pinchNeedsCommitRender = false;
-      if (shouldCommitRender) {
-        renderEverything();
-      }
+      stopPinchPreview(shouldCommitRender);
     }
     return wasPanning;
   }
@@ -1516,8 +1513,8 @@
     state.pan.lastTouchCenter = null;
     state.pan.pinchStartDistance = 0;
     state.pan.pinchStartZoom = 1;
-    state.pan.pinchLastRenderAt = 0;
     state.pan.pinchNeedsCommitRender = false;
+    stopPinchPreview(false);
     stopMiddlePan();
     state.renderBox = {
       left: 0,
@@ -1534,6 +1531,9 @@
   }
 
   function renderEverything() {
+    if (state.pan.pinchPreviewActive) {
+      stopPinchPreview(false);
+    }
     const editable = state.canEdit && !!state.parsed;
     if (!editable && state.mode !== "view") {
       state.mode = "view";
@@ -1882,19 +1882,137 @@
     target.scrollTop -= deltaY;
   }
 
-  function renderCurrentPageForLiveZoom() {
-    if (!state.previewDoc) {
+  function beginPinchPreview() {
+    if (state.pan.pinchPreviewActive) {
       return;
     }
-    if (viewerContainer.classList.contains("ui-hidden")) {
+    if (!state.previewDoc || viewerContainer.classList.contains("ui-hidden")) {
       return;
     }
-    const widthSource = allPagesScroll ? allPagesScroll.clientWidth : 0;
-    const baseWidth = Math.max(220, Math.min(360, widthSource * 0.32 || 320));
-    const maxWidth = Math.max(24, baseWidth * state.pageZoom);
-    renderCurrentPdfPage(maxWidth).catch((error) => {
-      console.warn("Live pinch zoom render failed.", error);
-    });
+    const baseWidth = Math.max(1, Math.floor(state.renderBox.width || 0));
+    const baseHeight = Math.max(1, Math.floor(state.renderBox.height || 0));
+    if (!baseWidth || !baseHeight) {
+      return;
+    }
+
+    const maxPreviewPixels = 2500000;
+    let sourceWidth = baseWidth;
+    let sourceHeight = baseHeight;
+    const totalPixels = sourceWidth * sourceHeight;
+    if (totalPixels > maxPreviewPixels) {
+      const scale = Math.sqrt(maxPreviewPixels / totalPixels);
+      sourceWidth = Math.max(1, Math.floor(sourceWidth * scale));
+      sourceHeight = Math.max(1, Math.floor(sourceHeight * scale));
+    }
+
+    const source = document.createElement("canvas");
+    source.width = sourceWidth;
+    source.height = sourceHeight;
+    const sourceCtx = source.getContext("2d");
+    if (!sourceCtx) {
+      return;
+    }
+    sourceCtx.fillStyle = "#ffffff";
+    sourceCtx.fillRect(0, 0, sourceWidth, sourceHeight);
+    sourceCtx.drawImage(pdfCanvas, 0, 0, sourceWidth, sourceHeight);
+    sourceCtx.drawImage(overlayCanvas, 0, 0, sourceWidth, sourceHeight);
+
+    state.pan.pinchPreviewActive = true;
+    state.pan.pinchPreviewSourceCanvas = source;
+    state.pan.pinchPreviewBaseWidth = baseWidth;
+    state.pan.pinchPreviewBaseHeight = baseHeight;
+    state.pan.pinchPendingScale = 1;
+    overlayCanvas.style.visibility = "hidden";
+    renderPinchPreviewFromCache(1);
+  }
+
+  function schedulePinchPreviewRender(scale) {
+    if (!state.pan.pinchPreviewActive) {
+      return;
+    }
+    state.pan.pinchPendingScale = Math.max(0.2, Math.min(8, scale));
+    if (state.pan.pinchRafId) {
+      return;
+    }
+    if (typeof window.requestAnimationFrame === "function") {
+      state.pan.pinchRafTimeout = false;
+      state.pan.pinchRafId = window.requestAnimationFrame(() => {
+        state.pan.pinchRafId = 0;
+        renderPinchPreviewFromCache(state.pan.pinchPendingScale);
+      });
+    } else {
+      state.pan.pinchRafTimeout = true;
+      state.pan.pinchRafId = window.setTimeout(() => {
+        state.pan.pinchRafId = 0;
+        renderPinchPreviewFromCache(state.pan.pinchPendingScale);
+      }, 16);
+    }
+  }
+
+  function cancelPinchPreviewRenderSchedule() {
+    if (!state.pan.pinchRafId) {
+      return;
+    }
+    if (state.pan.pinchRafTimeout) {
+      window.clearTimeout(state.pan.pinchRafId);
+    } else if (typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(state.pan.pinchRafId);
+    } else {
+      window.clearTimeout(state.pan.pinchRafId);
+    }
+    state.pan.pinchRafId = 0;
+    state.pan.pinchRafTimeout = false;
+  }
+
+  function renderPinchPreviewFromCache(scale) {
+    if (!state.pan.pinchPreviewActive) {
+      return;
+    }
+    const source = state.pan.pinchPreviewSourceCanvas;
+    if (!source) {
+      return;
+    }
+    const safeScale = Math.max(0.2, Math.min(8, Number(scale) || 1));
+    const nextWidth = Math.max(
+      24,
+      Math.round(state.pan.pinchPreviewBaseWidth * safeScale)
+    );
+    const nextHeight = Math.max(
+      24,
+      Math.round(state.pan.pinchPreviewBaseHeight * safeScale)
+    );
+    viewerContainer.style.width = `${nextWidth}px`;
+    viewerContainer.style.height = `${nextHeight}px`;
+    resizePdfCanvas();
+    resizeOverlayCanvas();
+    const size = getCanvasCssSize();
+    pdfCtx.clearRect(0, 0, size.width, size.height);
+    pdfCtx.drawImage(source, 0, 0, source.width, source.height, 0, 0, size.width, size.height);
+    overlayCtx.clearRect(0, 0, size.width, size.height);
+    state.renderBox = {
+      left: 0,
+      top: 0,
+      width: size.width,
+      height: size.height,
+    };
+  }
+
+  function stopPinchPreview(commitRender) {
+    cancelPinchPreviewRenderSchedule();
+    const wasActive = state.pan.pinchPreviewActive;
+    state.pan.pinchPreviewActive = false;
+    state.pan.pinchPreviewSourceCanvas = null;
+    state.pan.pinchPreviewBaseWidth = 0;
+    state.pan.pinchPreviewBaseHeight = 0;
+    state.pan.pinchPendingScale = 1;
+    overlayCanvas.style.visibility = "";
+    if (commitRender) {
+      renderEverything();
+      return;
+    }
+    if (wasActive) {
+      drawOverlay();
+    }
   }
 
   async function renderCurrentPdfPage(targetWidth) {
