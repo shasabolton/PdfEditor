@@ -391,8 +391,8 @@
     const snapshot = state.undoStack.pop();
     syncUndoButtonState();
     try {
-      if (snapshot && snapshot.kind === "annotations") {
-        applyAnnotationUndoSnapshot(snapshot);
+      if (snapshot && snapshot.kind === "annotations-page") {
+        applyAnnotationPageUndoSnapshot(snapshot);
         setStatus("Undo applied.", "ok");
         renderEverything();
         return;
@@ -418,16 +418,17 @@
     }
   }
 
-  function applyAnnotationUndoSnapshot(snapshot) {
+  function applyAnnotationPageUndoSnapshot(snapshot) {
     if (!state.canEdit || !state.parsed) {
       throw new Error("Undo step is no longer available for this document.");
     }
-    state.annotationsByPage = cloneAnnotationsByPage(snapshot.annotationsByPage);
-    for (const pageId of state.pageOrder) {
-      if (!state.annotationsByPage.has(pageId)) {
-        state.annotationsByPage.set(pageId, { strokes: [], texts: [] });
-      }
+    const pageId = snapshot && snapshot.pageId ? String(snapshot.pageId) : "";
+    if (!pageId || !state.pagesById.has(pageId)) {
+      throw new Error("Undo annotation target is no longer available.");
     }
+    const marks = clonePageAnnotations(snapshot.marks);
+    state.annotationsByPage.set(pageId, marks);
+
     if (snapshot.selectedPageId && state.pagesById.has(snapshot.selectedPageId)) {
       const page = state.pagesById.get(snapshot.selectedPageId);
       if (page && !page.deleted) {
@@ -455,13 +456,19 @@
     syncUndoButtonState();
   }
 
-  function pushUndoSnapshotFromAnnotations() {
+  function pushUndoSnapshotFromAnnotations(pageId) {
     if (!state.canEdit || !state.parsed) {
       return;
     }
+    const targetPageId = pageId || getCurrentPageId();
+    if (!targetPageId || !state.pagesById.has(targetPageId)) {
+      return;
+    }
+    const marks = getOrCreatePageAnnotations(targetPageId);
     state.undoStack.push({
-      kind: "annotations",
-      annotationsByPage: cloneAnnotationsByPage(state.annotationsByPage),
+      kind: "annotations-page",
+      pageId: targetPageId,
+      marks: clonePageAnnotations(marks),
       selectedPageId: state.selectedPageId || "",
       currentPageActiveIndex: state.currentPageActiveIndex,
     });
@@ -481,38 +488,40 @@
     }
   }
 
-  function cloneAnnotationsByPage(sourceMap) {
-    const cloned = new Map();
-    if (!(sourceMap instanceof Map)) {
-      return cloned;
-    }
-    for (const [pageId, marks] of sourceMap.entries()) {
-      const strokes = Array.isArray(marks && marks.strokes)
-        ? marks.strokes.map((stroke) => ({
-            color: stroke && stroke.color ? String(stroke.color) : "#d02626",
-            widthNorm: Math.max(0.0001, Number(stroke && stroke.widthNorm) || 0.001),
-            points: Array.isArray(stroke && stroke.points)
-              ? stroke.points.map((point) => ({
-                  x: Math.max(0, Math.min(1, Number(point && point.x) || 0)),
-                  y: Math.max(0, Math.min(1, Number(point && point.y) || 0)),
-                }))
-              : [],
+  function clonePageAnnotations(marks) {
+    const source = marks || { strokes: [], texts: [] };
+    const strokes = Array.isArray(source.strokes)
+      ? source.strokes.map(cloneStrokeAnnotation)
+      : [];
+    const texts = Array.isArray(source.texts)
+      ? source.texts.map(cloneTextAnnotation)
+      : [];
+    return { strokes, texts };
+  }
+
+  function cloneStrokeAnnotation(stroke) {
+    return {
+      color: stroke && stroke.color ? String(stroke.color) : "#d02626",
+      widthNorm: Math.max(0.0001, Number(stroke && stroke.widthNorm) || 0.001),
+      points: Array.isArray(stroke && stroke.points)
+        ? stroke.points.map((point) => ({
+            x: Math.max(0, Math.min(1, Number(point && point.x) || 0)),
+            y: Math.max(0, Math.min(1, Number(point && point.y) || 0)),
           }))
-        : [];
-      const texts = Array.isArray(marks && marks.texts)
-        ? marks.texts.map((textItem) => ({
-            x: Math.max(0, Math.min(1, Number(textItem && textItem.x) || 0)),
-            y: Math.max(0, Math.min(1, Number(textItem && textItem.y) || 0)),
-            sizeNorm: Math.max(0.01, Math.min(0.3, Number(textItem && textItem.sizeNorm) || 0.02)),
-            color: textItem && textItem.color ? String(textItem.color) : "#d02626",
-            text: String((textItem && textItem.text) || ""),
-            widthNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.widthNorm) || 0.2)),
-            heightNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.heightNorm) || 0.05)),
-          }))
-        : [];
-      cloned.set(pageId, { strokes, texts });
-    }
-    return cloned;
+        : [],
+    };
+  }
+
+  function cloneTextAnnotation(textItem) {
+    return {
+      x: Math.max(0, Math.min(1, Number(textItem && textItem.x) || 0)),
+      y: Math.max(0, Math.min(1, Number(textItem && textItem.y) || 0)),
+      sizeNorm: Math.max(0.01, Math.min(0.3, Number(textItem && textItem.sizeNorm) || 0.02)),
+      color: textItem && textItem.color ? String(textItem.color) : "#d02626",
+      text: String((textItem && textItem.text) || ""),
+      widthNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.widthNorm) || 0.2)),
+      heightNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.heightNorm) || 0.05)),
+    };
   }
 
   async function onMergeFileSelected(event) {
@@ -823,7 +832,7 @@
       setStatus("Current page has no drawing or text marks to clear.", "ok");
       return;
     }
-    pushUndoSnapshotFromAnnotations();
+    pushUndoSnapshotFromAnnotations(pageId);
     state.annotationsByPage.set(pageId, {
       strokes: [],
       texts: [],
@@ -856,7 +865,7 @@
       heightNorm: estimateTextHeightNorm(sizePx, canvasSize.height),
     };
     const marks = getOrCreatePageAnnotations(pageId);
-    pushUndoSnapshotFromAnnotations();
+    pushUndoSnapshotFromAnnotations(pageId);
     marks.texts.push(textItem);
     setActiveTextSelection(pageId, marks.texts.length - 1);
     drawOverlay();
@@ -995,7 +1004,7 @@
     }
 
     if (action === "text-delete") {
-      pushUndoSnapshotFromAnnotations();
+      pushUndoSnapshotFromAnnotations(pageId);
       marks.texts.splice(textIndex, 1);
       reconcileTextSelectionAfterDelete(pageId, textIndex);
       drawOverlay();
@@ -1010,7 +1019,7 @@
       if (Math.abs(nextSizeNorm - textItem.sizeNorm) < 0.0001) {
         return;
       }
-      pushUndoSnapshotFromAnnotations();
+      pushUndoSnapshotFromAnnotations(pageId);
       textItem.sizeNorm = nextSizeNorm;
       const canvasSize = getRenderCssSize();
       const sizePx = textItem.sizeNorm * canvasSize.height;
@@ -1089,7 +1098,7 @@
       const canvasSize = getRenderCssSize();
       const sizePx = Math.max(10, getToolSize() * 3);
       const marks = getOrCreatePageAnnotations(pageId);
-      pushUndoSnapshotFromAnnotations();
+      pushUndoSnapshotFromAnnotations(pageId);
       marks.texts.push({
         x: point.x,
         y: point.y,
@@ -1185,7 +1194,7 @@
         return;
       }
       if (!state.textInteraction.dragMoved && state.textInteraction.dragUndoReady) {
-        pushUndoSnapshotFromAnnotations();
+        pushUndoSnapshotFromAnnotations(pageId);
         state.textInteraction.dragUndoReady = false;
       }
       state.textInteraction.dragMoved = true;
@@ -1243,7 +1252,7 @@
           y: stroke.points[0].y + 0.0005,
         });
       }
-      pushUndoSnapshotFromAnnotations();
+      pushUndoSnapshotFromAnnotations(pageId);
       marks.strokes.push(stroke);
     }
 
@@ -2592,7 +2601,7 @@
     if (nextText === currentText && Math.abs(nextSizeNorm - currentSizeNorm) < 0.0001) {
       return false;
     }
-    pushUndoSnapshotFromAnnotations();
+    pushUndoSnapshotFromAnnotations(pageId);
     textItem.text = nextText;
     textItem.sizeNorm = nextSizeNorm;
     textItem.widthNorm = estimateTextWidthNorm(nextText, clampedSizePx, canvasSize.width);
