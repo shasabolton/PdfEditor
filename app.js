@@ -78,6 +78,10 @@
       touchPoints: new Map(),
       touchActive: false,
       lastTouchCenter: null,
+      pinchStartDistance: 0,
+      pinchStartZoom: 1,
+      pinchLastRenderAt: 0,
+      pinchNeedsCommitRender: false,
     },
   };
 
@@ -1286,6 +1290,10 @@
     }
     state.pan.touchActive = true;
     state.pan.lastTouchCenter = getTouchCenter();
+    state.pan.pinchStartDistance = getTouchDistance() || 0;
+    state.pan.pinchStartZoom = state.pageZoom;
+    state.pan.pinchLastRenderAt = 0;
+    state.pan.pinchNeedsCommitRender = false;
     drawOverlay();
     return true;
   }
@@ -1312,6 +1320,31 @@
     panByDelta(center.x - previous.x, center.y - previous.y);
     state.pan.touchActive = true;
     state.pan.lastTouchCenter = center;
+
+    const distance = getTouchDistance();
+    if (Number.isFinite(distance) && distance > 0) {
+      if (!state.pan.pinchStartDistance || state.pan.pinchStartDistance <= 0) {
+        state.pan.pinchStartDistance = distance;
+        state.pan.pinchStartZoom = state.pageZoom;
+      }
+      const rawZoom =
+        state.pan.pinchStartZoom * (distance / Math.max(1, state.pan.pinchStartDistance));
+      const nextZoom = Math.max(0.1, Math.min(5, Number(rawZoom.toFixed(2))));
+      if (Math.abs(nextZoom - state.pageZoom) >= 0.01) {
+        state.pageZoom = nextZoom;
+        state.pan.pinchNeedsCommitRender = true;
+        setZoomSelectValue(state.pageZoom);
+        updatePageRadiusScale();
+        const now =
+          typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : Date.now();
+        if (now - state.pan.pinchLastRenderAt >= 95) {
+          state.pan.pinchLastRenderAt = now;
+          renderCurrentPageForLiveZoom();
+        }
+      }
+    }
     event.preventDefault();
     return true;
   }
@@ -1324,8 +1357,16 @@
       state.pan.touchActive || state.pan.touchPoints.size >= 2;
     state.pan.touchPoints.delete(event.pointerId);
     if (state.pan.touchPoints.size < 2) {
+      const shouldCommitRender = state.pan.pinchNeedsCommitRender;
       state.pan.touchActive = false;
       state.pan.lastTouchCenter = null;
+      state.pan.pinchStartDistance = 0;
+      state.pan.pinchStartZoom = state.pageZoom;
+      state.pan.pinchLastRenderAt = 0;
+      state.pan.pinchNeedsCommitRender = false;
+      if (shouldCommitRender) {
+        renderEverything();
+      }
     }
     return wasPanning;
   }
@@ -1339,6 +1380,16 @@
       x: (points[0].x + points[1].x) / 2,
       y: (points[0].y + points[1].y) / 2,
     };
+  }
+
+  function getTouchDistance() {
+    const points = Array.from(state.pan.touchPoints.values());
+    if (points.length < 2) {
+      return 0;
+    }
+    const dx = points[0].x - points[1].x;
+    const dy = points[0].y - points[1].y;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   function getNormalizedPointerPoint(event) {
@@ -1463,6 +1514,10 @@
     state.pan.touchPoints.clear();
     state.pan.touchActive = false;
     state.pan.lastTouchCenter = null;
+    state.pan.pinchStartDistance = 0;
+    state.pan.pinchStartZoom = 1;
+    state.pan.pinchLastRenderAt = 0;
+    state.pan.pinchNeedsCommitRender = false;
     stopMiddlePan();
     state.renderBox = {
       left: 0,
@@ -1825,6 +1880,21 @@
     }
     target.scrollLeft -= deltaX;
     target.scrollTop -= deltaY;
+  }
+
+  function renderCurrentPageForLiveZoom() {
+    if (!state.previewDoc) {
+      return;
+    }
+    if (viewerContainer.classList.contains("ui-hidden")) {
+      return;
+    }
+    const widthSource = allPagesScroll ? allPagesScroll.clientWidth : 0;
+    const baseWidth = Math.max(220, Math.min(360, widthSource * 0.32 || 320));
+    const maxWidth = Math.max(24, baseWidth * state.pageZoom);
+    renderCurrentPdfPage(maxWidth).catch((error) => {
+      console.warn("Live pinch zoom render failed.", error);
+    });
   }
 
   async function renderCurrentPdfPage(targetWidth) {
@@ -2293,14 +2363,16 @@
       overlayCanvas.style.pointerEvents = "none";
       return;
     }
-    if (state.mode === "draw" || state.mode === "text") {
+    if (state.mode === "draw" || state.mode === "text" || state.mode === "pages") {
       overlayCanvas.style.pointerEvents = "auto";
       overlayCanvas.style.cursor =
         state.mode === "draw"
           ? "crosshair"
-          : state.textInteraction.dragPointerId !== null || hasActiveTextSelection()
-            ? "move"
-            : "text";
+          : state.mode === "text"
+            ? state.textInteraction.dragPointerId !== null || hasActiveTextSelection()
+              ? "move"
+              : "text"
+            : "grab";
       overlayCanvas.style.touchAction = "none";
       return;
     }
