@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vanilla JS Client-Side PDF Editor</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-main">
+      <h1>Vanilla PDF Editor</h1>
+      <div class="topbar-actions">
+        <details class="file-menu">
+          <summary>File</summary>
+          <div class="file-menu-list">
+            <label class="file-input-label">
+              <span>Open PDF</span>
+              <input id="fileInput" type="file" accept="application/pdf">
+            </label>
+            <button id="saveBtn" type="button" disabled>Save PDF</button>
+            <button id="closeFileBtn" type="button" disabled>Close File</button>
+          </div>
+        </details>
+        <button id="undoBtn" type="button" disabled>Undo</button>
+
+        <label for="modeSelect">Mode</label>
+        <select id="modeSelect" disabled>
+          <option value="view">View</option>
+          <option value="pages">Pages</option>
+          <option value="draw">Draw</option>
+          <option value="text">Text</option>
+        </select>
+
+        <label for="zoomSelect">Zoom</label>
+        <select id="zoomSelect" disabled>
+          <option value="0.1">10%</option>
+          <option value="0.25">25%</option>
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1" selected>100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200%</option>
+          <option value="3">300%</option>
+          <option value="4">400%</option>
+          <option value="5">500%</option>
+        </select>
+      </div>
+    </div>
+    <input id="mergeFileInput" type="file" accept="application/pdf" class="ui-hidden">
+    <div id="modeToolPanel" class="mode-tool-panel hidden"></div>
+  </header>
+
+  <main class="app-shell">
+    <section class="viewer-section">
+      <div id="viewerContainer" class="ui-hidden">
+        <canvas id="pdfCanvas" aria-label="PDF preview canvas"></canvas>
+        <canvas id="overlayCanvas"></canvas>
+      </div>
+      <div id="allPagesScroll" class="all-pages-scroll" aria-label="All pages preview"></div>
+      <p class="viewer-help">
+        Select a page from the list. In edit modes, that page opens inline for editing.
+      </p>
+
+      <p id="statusText">Load a PDF to begin.</p>
+      <div id="downloadFallback" class="download-fallback hidden" aria-live="polite">
+        <a id="downloadFallbackLink" href="#" download>Download Saved PDF</a>
+        <button id="openSavedBtn" type="button" disabled>Open Saved PDF</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
