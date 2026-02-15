@@ -1275,9 +1275,6 @@
     if (event.pointerType !== "touch") {
       return false;
     }
-    if (!state.pan.touchActive && state.pan.touchPoints.size > 0) {
-      state.pan.touchPoints.clear();
-    }
     if (!state.pan.touchActive && state.pan.pinchPreviewActive) {
       stopPinchPreview(false);
     }
