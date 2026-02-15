@@ -281,6 +281,12 @@ button:not(:disabled),
   background: #131928;
 }
 
+.text-item.active {
+  border-color: #ff4f4f;
+  box-shadow: 0 0 0 1px #ff4f4f inset;
+  background: #1b2436;
+}
+
 .text-item-head {
   font-size: 0.82rem;
   color: var(--text-dim);

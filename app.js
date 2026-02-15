@@ -62,6 +62,15 @@
       pointerId: null,
       currentStroke: null,
     },
+    textInteraction: {
+      activePageId: "",
+      activeTextIndex: -1,
+      dragPointerId: null,
+      dragOffsetX: 0,
+      dragOffsetY: 0,
+      dragMoved: false,
+      dragUndoReady: false,
+    },
     pan: {
       middleActive: false,
       lastMouseX: 0,
@@ -86,6 +95,9 @@
     undoBtn.addEventListener("click", onUndoClick);
     openSavedBtn.addEventListener("click", onOpenSavedClick);
     modeSelect.addEventListener("change", () => {
+      if (modeSelect.value !== "text") {
+        clearTextInteractionState();
+      }
       state.mode = modeSelect.value;
       renderEverything();
     });
@@ -113,6 +125,7 @@
     overlayCanvas.addEventListener("pointermove", onOverlayPointerMove);
     overlayCanvas.addEventListener("pointerup", onOverlayPointerUp);
     overlayCanvas.addEventListener("pointercancel", onOverlayPointerUp);
+    overlayCanvas.addEventListener("dblclick", onOverlayDoubleClick);
 
     window.addEventListener("resize", () => {
       syncTopbarOffset();
@@ -376,8 +389,18 @@
       return;
     }
     const snapshot = state.undoStack.pop();
+    syncUndoButtonState();
     try {
-      const bytes = new Uint8Array(snapshot.bytes);
+      if (snapshot && snapshot.kind === "annotations") {
+        applyAnnotationUndoSnapshot(snapshot);
+        setStatus("Undo applied.", "ok");
+        renderEverything();
+        return;
+      }
+      const bytes = new Uint8Array(snapshot && snapshot.bytes ? snapshot.bytes : []);
+      if (!bytes.length) {
+        throw new Error("Undo snapshot is invalid.");
+      }
       const loaded = await loadDocumentFromBytes(
         bytes,
         snapshot.fileName || state.fileName || "document.pdf",
@@ -386,6 +409,7 @@
       if (!loaded) {
         return;
       }
+      clearTextInteractionState();
       setStatus("Undo applied.", "ok");
       renderEverything();
     } catch (error) {
@@ -394,17 +418,101 @@
     }
   }
 
+  function applyAnnotationUndoSnapshot(snapshot) {
+    if (!state.canEdit || !state.parsed) {
+      throw new Error("Undo step is no longer available for this document.");
+    }
+    state.annotationsByPage = cloneAnnotationsByPage(snapshot.annotationsByPage);
+    for (const pageId of state.pageOrder) {
+      if (!state.annotationsByPage.has(pageId)) {
+        state.annotationsByPage.set(pageId, { strokes: [], texts: [] });
+      }
+    }
+    if (snapshot.selectedPageId && state.pagesById.has(snapshot.selectedPageId)) {
+      const page = state.pagesById.get(snapshot.selectedPageId);
+      if (page && !page.deleted) {
+        state.selectedPageId = snapshot.selectedPageId;
+      }
+    }
+    if (Number.isInteger(snapshot.currentPageActiveIndex)) {
+      state.currentPageActiveIndex = snapshot.currentPageActiveIndex;
+    }
+    clearTextInteractionState();
+    normalizeCurrentPageIndex();
+    ensureSelectedPageId();
+  }
+
   function pushUndoSnapshotFromBytes(bytes) {
     if (!bytes || !bytes.length) {
       return;
     }
     state.undoStack.push({
+      kind: "bytes",
       bytes: new Uint8Array(bytes),
       fileName: state.fileName || "document.pdf",
     });
-    if (state.undoStack.length > 20) {
-      state.undoStack.shift();
+    trimUndoStack();
+    syncUndoButtonState();
+  }
+
+  function pushUndoSnapshotFromAnnotations() {
+    if (!state.canEdit || !state.parsed) {
+      return;
     }
+    state.undoStack.push({
+      kind: "annotations",
+      annotationsByPage: cloneAnnotationsByPage(state.annotationsByPage),
+      selectedPageId: state.selectedPageId || "",
+      currentPageActiveIndex: state.currentPageActiveIndex,
+    });
+    trimUndoStack();
+    syncUndoButtonState();
+  }
+
+  function trimUndoStack() {
+    if (state.undoStack.length > 20) {
+      state.undoStack.splice(0, state.undoStack.length - 20);
+    }
+  }
+
+  function syncUndoButtonState() {
+    if (undoBtn) {
+      undoBtn.disabled = state.undoStack.length === 0;
+    }
+  }
+
+  function cloneAnnotationsByPage(sourceMap) {
+    const cloned = new Map();
+    if (!(sourceMap instanceof Map)) {
+      return cloned;
+    }
+    for (const [pageId, marks] of sourceMap.entries()) {
+      const strokes = Array.isArray(marks && marks.strokes)
+        ? marks.strokes.map((stroke) => ({
+            color: stroke && stroke.color ? String(stroke.color) : "#d02626",
+            widthNorm: Math.max(0.0001, Number(stroke && stroke.widthNorm) || 0.001),
+            points: Array.isArray(stroke && stroke.points)
+              ? stroke.points.map((point) => ({
+                  x: Math.max(0, Math.min(1, Number(point && point.x) || 0)),
+                  y: Math.max(0, Math.min(1, Number(point && point.y) || 0)),
+                }))
+              : [],
+          }))
+        : [];
+      const texts = Array.isArray(marks && marks.texts)
+        ? marks.texts.map((textItem) => ({
+            x: Math.max(0, Math.min(1, Number(textItem && textItem.x) || 0)),
+            y: Math.max(0, Math.min(1, Number(textItem && textItem.y) || 0)),
+            sizeNorm: Math.max(0.01, Math.min(0.3, Number(textItem && textItem.sizeNorm) || 0.02)),
+            color: textItem && textItem.color ? String(textItem.color) : "#d02626",
+            text: String((textItem && textItem.text) || ""),
+            widthNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.widthNorm) || 0.2)),
+            heightNorm: Math.max(0.01, Math.min(1, Number(textItem && textItem.heightNorm) || 0.05)),
+          }))
+        : [];
+      cloned.set(pageId, { strokes, texts });
+    }
+    return cloned;
   }
 
   async function onMergeFileSelected(event) {
@@ -710,10 +818,17 @@
     if (!pageId) {
       return;
     }
+    const marks = getOrCreatePageAnnotations(pageId);
+    if (!marks.strokes.length && !marks.texts.length) {
+      setStatus("Current page has no drawing or text marks to clear.", "ok");
+      return;
+    }
+    pushUndoSnapshotFromAnnotations();
     state.annotationsByPage.set(pageId, {
       strokes: [],
       texts: [],
     });
+    clearTextInteractionState();
     drawOverlay();
     renderModeToolPanel();
     setStatus("Cleared drawing/text marks on current page.", "ok");
@@ -741,7 +856,9 @@
       heightNorm: estimateTextHeightNorm(sizePx, canvasSize.height),
     };
     const marks = getOrCreatePageAnnotations(pageId);
+    pushUndoSnapshotFromAnnotations();
     marks.texts.push(textItem);
+    setActiveTextSelection(pageId, marks.texts.length - 1);
     drawOverlay();
     renderModeToolPanel();
     setStatus("Added text annotation.", "ok");
@@ -838,6 +955,9 @@
     if (!pageId) {
       return;
     }
+    if (pageId !== state.selectedPageId) {
+      clearTextInteractionState();
+    }
     state.selectedPageId = pageId;
     const idx = getActiveIndexForPageId(pageId);
     if (idx >= 0) {
@@ -864,14 +984,10 @@
     const action = button.dataset.action;
 
     if (action === "text-edit") {
-      const next = window.prompt("Edit text:", textItem.text);
-      if (next === null) {
+      if (!promptEditTextItem(pageId, textIndex)) {
         return;
       }
-      textItem.text = next;
-      const canvasSize = getRenderCssSize();
-      const sizePx = Math.max(8, textItem.sizeNorm * canvasSize.height);
-      textItem.widthNorm = estimateTextWidthNorm(next, sizePx, canvasSize.width);
+      setActiveTextSelection(pageId, textIndex);
       drawOverlay();
       renderModeToolPanel();
       setStatus("Updated text.", "ok");
@@ -879,7 +995,9 @@
     }
 
     if (action === "text-delete") {
+      pushUndoSnapshotFromAnnotations();
       marks.texts.splice(textIndex, 1);
+      reconcileTextSelectionAfterDelete(pageId, textIndex);
       drawOverlay();
       renderModeToolPanel();
       setStatus("Deleted text item.", "ok");
@@ -888,7 +1006,12 @@
 
     if (action === "text-size-plus" || action === "text-size-minus") {
       const delta = action === "text-size-plus" ? 0.01 : -0.01;
-      textItem.sizeNorm = Math.max(0.01, Math.min(0.3, textItem.sizeNorm + delta));
+      const nextSizeNorm = Math.max(0.01, Math.min(0.3, textItem.sizeNorm + delta));
+      if (Math.abs(nextSizeNorm - textItem.sizeNorm) < 0.0001) {
+        return;
+      }
+      pushUndoSnapshotFromAnnotations();
+      textItem.sizeNorm = nextSizeNorm;
       const canvasSize = getRenderCssSize();
       const sizePx = textItem.sizeNorm * canvasSize.height;
       textItem.widthNorm = estimateTextWidthNorm(
@@ -897,6 +1020,7 @@
         canvasSize.width
       );
       textItem.heightNorm = estimateTextHeightNorm(sizePx, canvasSize.height);
+      setActiveTextSelection(pageId, textIndex);
       drawOverlay();
       renderModeToolPanel();
       return;
@@ -912,6 +1036,9 @@
     }
     const pageId = getCurrentPageId();
     if (!pageId) {
+      return;
+    }
+    if (event.pointerType === "mouse" && Number.isInteger(event.button) && event.button !== 0) {
       return;
     }
     if (state.mode === "draw") {
@@ -934,6 +1061,25 @@
     if (state.mode === "text") {
       const point = getNormalizedPointerPoint(event);
       if (!point) {
+        if (hasActiveTextSelection()) {
+          clearTextInteractionState();
+          drawOverlay();
+          renderModeToolPanel();
+        }
+        return;
+      }
+      const hitIndex = getTextHitIndexAtPoint(pageId, point);
+      if (hitIndex >= 0) {
+        setActiveTextSelection(pageId, hitIndex);
+        startTextDrag(event, pageId, hitIndex, point);
+        drawOverlay();
+        renderModeToolPanel();
+        return;
+      }
+      if (hasActiveTextSelection()) {
+        clearTextInteractionState();
+        drawOverlay();
+        renderModeToolPanel();
         return;
       }
       const text = window.prompt("Enter text:");
@@ -943,6 +1089,7 @@
       const canvasSize = getRenderCssSize();
       const sizePx = Math.max(10, getToolSize() * 3);
       const marks = getOrCreatePageAnnotations(pageId);
+      pushUndoSnapshotFromAnnotations();
       marks.texts.push({
         x: point.x,
         y: point.y,
@@ -952,14 +1099,100 @@
         widthNorm: estimateTextWidthNorm(text, sizePx, canvasSize.width),
         heightNorm: estimateTextHeightNorm(sizePx, canvasSize.height),
       });
+      setActiveTextSelection(pageId, marks.texts.length - 1);
       drawOverlay();
       renderModeToolPanel();
       setStatus("Placed text annotation.", "ok");
+      return;
     }
+  }
+
+  function onOverlayDoubleClick(event) {
+    if (!state.canEdit || state.mode !== "text") {
+      return;
+    }
+    const pageId = getCurrentPageId();
+    if (!pageId) {
+      return;
+    }
+    const point = getNormalizedPointerPoint(event);
+    if (!point) {
+      return;
+    }
+    const hitIndex = getTextHitIndexAtPoint(pageId, point);
+    if (hitIndex < 0) {
+      if (hasActiveTextSelection()) {
+        clearTextInteractionState();
+        drawOverlay();
+        renderModeToolPanel();
+      }
+      return;
+    }
+    stopTextDrag();
+    setActiveTextSelection(pageId, hitIndex);
+    if (!promptEditTextItem(pageId, hitIndex)) {
+      drawOverlay();
+      renderModeToolPanel();
+      return;
+    }
+    drawOverlay();
+    renderModeToolPanel();
+    setStatus("Updated text.", "ok");
+    event.preventDefault();
   }
 
   function onOverlayPointerMove(event) {
     if (handleTouchPanPointerMove(event)) {
+      return;
+    }
+    if (state.mode === "text") {
+      if (!state.canEdit || state.textInteraction.dragPointerId !== event.pointerId) {
+        return;
+      }
+      const pageId = state.textInteraction.activePageId;
+      const textIndex = state.textInteraction.activeTextIndex;
+      const marks = state.annotationsByPage.get(pageId);
+      const textItem =
+        marks &&
+        Array.isArray(marks.texts) &&
+        textIndex >= 0 &&
+        textIndex < marks.texts.length
+          ? marks.texts[textIndex]
+          : null;
+      if (!textItem) {
+        stopTextDrag();
+        return;
+      }
+      const point = getNormalizedPointerPointClamped(event);
+      if (!point) {
+        return;
+      }
+      const bounds = getTextBoundsNorm(textItem);
+      const maxX = Math.max(0, 1 - bounds.widthNorm);
+      const maxY = Math.max(0, 1 - bounds.heightNorm);
+      const nextX = Math.max(
+        0,
+        Math.min(maxX, point.x - state.textInteraction.dragOffsetX)
+      );
+      const nextY = Math.max(
+        0,
+        Math.min(maxY, point.y - state.textInteraction.dragOffsetY)
+      );
+      if (
+        Math.abs(nextX - (textItem.x || 0)) < 0.0001 &&
+        Math.abs(nextY - (textItem.y || 0)) < 0.0001
+      ) {
+        return;
+      }
+      if (!state.textInteraction.dragMoved && state.textInteraction.dragUndoReady) {
+        pushUndoSnapshotFromAnnotations();
+        state.textInteraction.dragUndoReady = false;
+      }
+      state.textInteraction.dragMoved = true;
+      textItem.x = nextX;
+      textItem.y = nextY;
+      drawOverlay();
+      event.preventDefault();
       return;
     }
     if (state.mode !== "draw") {
@@ -980,6 +1213,19 @@
     if (handleTouchPanPointerUp(event)) {
       return;
     }
+    if (state.mode === "text") {
+      if (state.textInteraction.dragPointerId !== event.pointerId) {
+        return;
+      }
+      const moved = !!state.textInteraction.dragMoved;
+      stopTextDrag();
+      if (moved) {
+        drawOverlay();
+        renderModeToolPanel();
+        setStatus("Moved text annotation.", "ok");
+      }
+      return;
+    }
     if (state.mode !== "draw") {
       return;
     }
@@ -997,6 +1243,7 @@
           y: stroke.points[0].y + 0.0005,
         });
       }
+      pushUndoSnapshotFromAnnotations();
       marks.strokes.push(stroke);
     }
 
@@ -1024,6 +1271,9 @@
       }
       state.drawing.pointerId = null;
       state.drawing.currentStroke = null;
+    }
+    if (state.textInteraction.dragPointerId !== null) {
+      stopTextDrag();
     }
     state.pan.touchActive = true;
     state.pan.lastTouchCenter = getTouchCenter();
@@ -1109,11 +1359,31 @@
     };
   }
 
+  function getNormalizedPointerPointClamped(event) {
+    const rect = overlayCanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return null;
+    }
+    const box = state.renderBox;
+    if (!box || box.width <= 0 || box.height <= 0) {
+      return null;
+    }
+    const xPx = event.clientX - rect.left;
+    const yPx = event.clientY - rect.top;
+    const x = (xPx - box.left) / box.width;
+    const y = (yPx - box.top) / box.height;
+    return {
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y)),
+    };
+  }
+
   function initializePageModels(pageDescriptors) {
     state.pageOrder = [];
     state.pagesById = new Map();
     state.annotationsByPage = new Map();
     state.currentPageActiveIndex = 0;
+    clearTextInteractionState();
 
     for (let i = 0; i < pageDescriptors.length; i += 1) {
       const page = pageDescriptors[i];
@@ -1180,6 +1450,7 @@
     state.mode = "view";
     state.drawing.pointerId = null;
     state.drawing.currentStroke = null;
+    clearTextInteractionState();
     state.pan.touchPoints.clear();
     state.pan.touchActive = false;
     state.pan.lastTouchCenter = null;
@@ -1195,6 +1466,7 @@
     }
     clearPdfCanvas();
     drawOverlay();
+    syncUndoButtonState();
   }
 
   function renderEverything() {
@@ -1209,12 +1481,21 @@
     }
     normalizeCurrentPageIndex();
     ensureSelectedPageId();
+    if (state.mode !== "text") {
+      clearTextInteractionState();
+    } else {
+      const activeSelection = getActiveTextSelection();
+      const currentPageId = getCurrentPageId();
+      if (activeSelection && currentPageId && activeSelection.pageId !== currentPageId) {
+        clearTextInteractionState();
+      }
+    }
     updateSavedDownloadUI();
     updatePageRadiusScale();
 
     saveBtn.disabled = !editable;
     closeFileBtn.disabled = !state.sourceUrl;
-    undoBtn.disabled = state.undoStack.length === 0;
+    syncUndoButtonState();
     openSavedBtn.disabled = !state.lastSavedUrl;
     modeSelect.disabled = !editable;
     zoomSelect.disabled = !state.previewDoc;
@@ -1359,12 +1640,18 @@
     if (state.mode === "text") {
       const marks = state.annotationsByPage.get(pageId);
       const textItems = marks && marks.texts ? marks.texts : [];
+      const activeSelection = getActiveTextSelection();
+      const activeTextIndex =
+        activeSelection && activeSelection.pageId === pageId
+          ? activeSelection.textIndex
+          : -1;
       const listHtml = textItems.length
         ? textItems
             .map((item, index) => {
               const preview = escapeHtml(item.text).slice(0, 80);
+              const isActive = index === activeTextIndex;
               return `
-                <div class="text-item">
+                <div class="text-item${isActive ? " active" : ""}">
                   <div class="text-item-head">#${index + 1}: ${preview || "(empty)"}</div>
                   <div class="text-item-actions">
                     <button type="button" data-action="text-edit" data-page-id="${pageId}" data-text-index="${index}">Edit</button>
@@ -1386,6 +1673,7 @@
           <button type="button" data-action="add-centered-text">Add Centered Text</button>
           <button type="button" data-action="clear-marks">Clear Page Draw/Text</button>
         </div>
+        <div class="pages-help">Single click text to move. Double click text to edit content and size.</div>
         <div class="mode-tools-list">${listHtml}</div>
       `;
       syncTopbarOffset();
@@ -1912,6 +2200,9 @@
     for (const textItem of marks.texts) {
       drawTextPreview(textItem);
     }
+    if (state.mode === "text") {
+      drawActiveTextSelectionBox(pageId);
+    }
   }
 
   function drawStrokePreview(stroke) {
@@ -1960,6 +2251,34 @@
     overlayCtx.restore();
   }
 
+  function drawActiveTextSelectionBox(pageId) {
+    const selection = getActiveTextSelection();
+    if (!selection || selection.pageId !== pageId) {
+      return;
+    }
+    const box = state.renderBox;
+    if (!box || !box.width || !box.height) {
+      return;
+    }
+    const bounds = getTextBoundsNorm(selection.textItem);
+    const left = box.left + bounds.left * box.width;
+    const top = box.top + bounds.top * box.height;
+    const width = Math.max(12, (bounds.right - bounds.left) * box.width);
+    const height = Math.max(8, (bounds.bottom - bounds.top) * box.height);
+
+    overlayCtx.save();
+    overlayCtx.fillStyle = "rgba(255, 79, 79, 0.12)";
+    overlayCtx.fillRect(left - 2, top - 2, width + 4, height + 4);
+    overlayCtx.strokeStyle = "#ff4f4f";
+    overlayCtx.lineWidth = 1.5;
+    overlayCtx.setLineDash([6, 4]);
+    overlayCtx.strokeRect(left - 2, top - 2, width + 4, height + 4);
+    overlayCtx.setLineDash([]);
+    overlayCtx.fillStyle = "#ff4f4f";
+    overlayCtx.fillRect(left + width - 4, top + height - 4, 8, 8);
+    overlayCtx.restore();
+  }
+
   function updateOverlayInteractivity() {
     if (!state.canEdit) {
       overlayCanvas.style.pointerEvents = "none";
@@ -1967,7 +2286,12 @@
     }
     if (state.mode === "draw" || state.mode === "text") {
       overlayCanvas.style.pointerEvents = "auto";
-      overlayCanvas.style.cursor = state.mode === "draw" ? "crosshair" : "text";
+      overlayCanvas.style.cursor =
+        state.mode === "draw"
+          ? "crosshair"
+          : state.textInteraction.dragPointerId !== null || hasActiveTextSelection()
+            ? "move"
+            : "text";
       overlayCanvas.style.touchAction = "none";
       return;
     }
@@ -2093,6 +2417,187 @@
       state.annotationsByPage.set(pageId, { strokes: [], texts: [] });
     }
     return state.annotationsByPage.get(pageId);
+  }
+
+  function getActiveTextSelection() {
+    const pageId = state.textInteraction.activePageId;
+    const textIndex = state.textInteraction.activeTextIndex;
+    if (!pageId || textIndex < 0) {
+      return null;
+    }
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks || !Array.isArray(marks.texts) || textIndex >= marks.texts.length) {
+      return null;
+    }
+    return {
+      pageId,
+      textIndex,
+      textItem: marks.texts[textIndex],
+    };
+  }
+
+  function hasActiveTextSelection() {
+    return !!getActiveTextSelection();
+  }
+
+  function clearTextInteractionState() {
+    stopTextDrag();
+    state.textInteraction.activePageId = "";
+    state.textInteraction.activeTextIndex = -1;
+  }
+
+  function setActiveTextSelection(pageId, textIndex) {
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks || !Array.isArray(marks.texts) || textIndex < 0 || textIndex >= marks.texts.length) {
+      clearTextInteractionState();
+      return false;
+    }
+    if (
+      state.textInteraction.activePageId !== pageId ||
+      state.textInteraction.activeTextIndex !== textIndex
+    ) {
+      stopTextDrag();
+    }
+    state.textInteraction.activePageId = pageId;
+    state.textInteraction.activeTextIndex = textIndex;
+    return true;
+  }
+
+  function reconcileTextSelectionAfterDelete(pageId, deletedIndex) {
+    if (state.textInteraction.activePageId !== pageId) {
+      return;
+    }
+    if (state.textInteraction.activeTextIndex === deletedIndex) {
+      clearTextInteractionState();
+      return;
+    }
+    if (state.textInteraction.activeTextIndex > deletedIndex) {
+      state.textInteraction.activeTextIndex -= 1;
+    }
+  }
+
+  function getTextBoundsNorm(textItem) {
+    const renderSize = getRenderCssSize();
+    const minWidthNorm = 12 / Math.max(1, renderSize.width);
+    const minHeightNorm = 8 / Math.max(1, renderSize.height);
+    const widthNorm = Math.max(
+      minWidthNorm,
+      Math.min(0.98, Number(textItem && textItem.widthNorm) || minWidthNorm)
+    );
+    const heightNorm = Math.max(
+      minHeightNorm,
+      Math.min(0.8, Number(textItem && textItem.heightNorm) || minHeightNorm)
+    );
+    const left = Math.max(0, Math.min(1, Number(textItem && textItem.x) || 0));
+    const top = Math.max(0, Math.min(1, Number(textItem && textItem.y) || 0));
+    const right = Math.min(1, left + widthNorm);
+    const bottom = Math.min(1, top + heightNorm);
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      widthNorm,
+      heightNorm,
+    };
+  }
+
+  function getTextHitIndexAtPoint(pageId, point) {
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks || !Array.isArray(marks.texts) || !marks.texts.length) {
+      return -1;
+    }
+    const renderSize = getRenderCssSize();
+    const padX = 6 / Math.max(1, renderSize.width);
+    const padY = 6 / Math.max(1, renderSize.height);
+    for (let i = marks.texts.length - 1; i >= 0; i -= 1) {
+      const bounds = getTextBoundsNorm(marks.texts[i]);
+      if (
+        point.x >= bounds.left - padX &&
+        point.x <= bounds.right + padX &&
+        point.y >= bounds.top - padY &&
+        point.y <= bounds.bottom + padY
+      ) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function startTextDrag(event, pageId, textIndex, point) {
+    if (Number.isInteger(event.button) && event.button !== 0) {
+      return;
+    }
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks || !Array.isArray(marks.texts) || textIndex < 0 || textIndex >= marks.texts.length) {
+      return;
+    }
+    const textItem = marks.texts[textIndex];
+    state.textInteraction.dragPointerId = event.pointerId;
+    state.textInteraction.dragOffsetX = point.x - (Number(textItem.x) || 0);
+    state.textInteraction.dragOffsetY = point.y - (Number(textItem.y) || 0);
+    state.textInteraction.dragMoved = false;
+    state.textInteraction.dragUndoReady = true;
+    try {
+      overlayCanvas.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Ignore capture errors from browsers that handle pointer capture differently.
+    }
+  }
+
+  function stopTextDrag() {
+    const pointerId = state.textInteraction.dragPointerId;
+    if (pointerId !== null) {
+      try {
+        overlayCanvas.releasePointerCapture(pointerId);
+      } catch (error) {
+        // Ignore release failures caused by browser differences.
+      }
+    }
+    state.textInteraction.dragPointerId = null;
+    state.textInteraction.dragOffsetX = 0;
+    state.textInteraction.dragOffsetY = 0;
+    state.textInteraction.dragMoved = false;
+    state.textInteraction.dragUndoReady = false;
+  }
+
+  function promptEditTextItem(pageId, textIndex) {
+    const marks = state.annotationsByPage.get(pageId);
+    if (!marks || !Array.isArray(marks.texts) || textIndex < 0 || textIndex >= marks.texts.length) {
+      return false;
+    }
+    const textItem = marks.texts[textIndex];
+    const nextText = window.prompt("Edit text:", textItem.text || "");
+    if (nextText === null) {
+      return false;
+    }
+    const canvasSize = getRenderCssSize();
+    const currentSizePx = Math.max(8, (Number(textItem.sizeNorm) || 0.02) * canvasSize.height);
+    const nextSizeRaw = window.prompt("Edit text size (px):", String(Math.round(currentSizePx)));
+    if (nextSizeRaw === null) {
+      return false;
+    }
+    const parsedSize = Number.parseFloat(nextSizeRaw);
+    if (!Number.isFinite(parsedSize) || parsedSize <= 0) {
+      setStatus("Text size must be a positive number.", "error");
+      return false;
+    }
+    const clampedSizePx = Math.max(6, Math.min(240, parsedSize));
+    const nextSizeNorm = Math.max(
+      0.01,
+      Math.min(0.3, clampedSizePx / Math.max(1, canvasSize.height))
+    );
+    const currentText = String(textItem.text || "");
+    const currentSizeNorm = Number(textItem.sizeNorm) || 0.02;
+    if (nextText === currentText && Math.abs(nextSizeNorm - currentSizeNorm) < 0.0001) {
+      return false;
+    }
+    pushUndoSnapshotFromAnnotations();
+    textItem.text = nextText;
+    textItem.sizeNorm = nextSizeNorm;
+    textItem.widthNorm = estimateTextWidthNorm(nextText, clampedSizePx, canvasSize.width);
+    textItem.heightNorm = estimateTextHeightNorm(clampedSizePx, canvasSize.height);
+    return true;
   }
 
   async function buildEditedPdfWithPdfLib() {
