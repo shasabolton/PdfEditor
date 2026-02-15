@@ -1275,6 +1275,12 @@
     if (event.pointerType !== "touch") {
       return false;
     }
+    if (!state.pan.touchActive && state.pan.touchPoints.size > 0) {
+      state.pan.touchPoints.clear();
+    }
+    if (!state.pan.touchActive && state.pan.pinchPreviewActive) {
+      stopPinchPreview(false);
+    }
     state.pan.touchPoints.set(event.pointerId, {
       x: event.clientX,
       y: event.clientY,
@@ -1356,16 +1362,21 @@
       state.pan.touchActive || state.pan.touchPoints.size >= 2;
     state.pan.touchPoints.delete(event.pointerId);
     if (state.pan.touchPoints.size < 2) {
-      const shouldCommitRender =
-        state.pan.pinchNeedsCommitRender || state.pan.pinchPreviewActive;
-      state.pan.touchActive = false;
-      state.pan.lastTouchCenter = null;
-      state.pan.pinchStartDistance = 0;
-      state.pan.pinchStartZoom = state.pageZoom;
-      state.pan.pinchNeedsCommitRender = false;
-      stopPinchPreview(shouldCommitRender);
+      endTouchPanGesture();
     }
     return wasPanning;
+  }
+
+  function endTouchPanGesture() {
+    const shouldCommitRender =
+      state.pan.pinchNeedsCommitRender || state.pan.pinchPreviewActive;
+    state.pan.touchPoints.clear();
+    state.pan.touchActive = false;
+    state.pan.lastTouchCenter = null;
+    state.pan.pinchStartDistance = 0;
+    state.pan.pinchStartZoom = state.pageZoom;
+    state.pan.pinchNeedsCommitRender = false;
+    stopPinchPreview(shouldCommitRender);
   }
 
   function getTouchCenter() {
@@ -1882,6 +1893,38 @@
     target.scrollTop -= deltaY;
   }
 
+  function getAppShellScrollPosition() {
+    if (!appShell) {
+      return { left: 0, top: 0 };
+    }
+    return {
+      left: appShell.scrollLeft,
+      top: appShell.scrollTop,
+    };
+  }
+
+  function restoreAppShellScrollPosition(left, top) {
+    if (!appShell) {
+      return;
+    }
+    const target = appShell;
+    const apply = () => {
+      target.scrollLeft = left;
+      target.scrollTop = top;
+    };
+    apply();
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        apply();
+        window.requestAnimationFrame(apply);
+      });
+    } else {
+      window.setTimeout(apply, 0);
+      window.setTimeout(apply, 40);
+    }
+    window.setTimeout(apply, 120);
+  }
+
   function beginPinchPreview() {
     if (state.pan.pinchPreviewActive) {
       return;
@@ -2007,7 +2050,9 @@
     state.pan.pinchPendingScale = 1;
     overlayCanvas.style.visibility = "";
     if (commitRender) {
+      const scroll = getAppShellScrollPosition();
       renderEverything();
+      restoreAppShellScrollPosition(scroll.left, scroll.top);
       return;
     }
     if (wasActive) {
