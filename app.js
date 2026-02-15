@@ -86,6 +86,10 @@
       pinchPreviewBaseWidth: 0,
       pinchPreviewBaseHeight: 0,
       pinchPendingScale: 1,
+      pinchPendingCenterX: 0,
+      pinchPendingCenterY: 0,
+      pinchAnchorNormX: 0.5,
+      pinchAnchorNormY: 0.5,
       pinchRafId: 0,
       pinchRafTimeout: false,
     },
@@ -1302,6 +1306,22 @@
     state.pan.pinchStartDistance = getTouchDistance() || 0;
     state.pan.pinchStartZoom = state.pageZoom;
     state.pan.pinchNeedsCommitRender = false;
+    if (state.pan.lastTouchCenter) {
+      state.pan.pinchPendingCenterX = state.pan.lastTouchCenter.x;
+      state.pan.pinchPendingCenterY = state.pan.lastTouchCenter.y;
+      const anchor = getNormalizedRenderPointFromClient(
+        state.pan.lastTouchCenter.x,
+        state.pan.lastTouchCenter.y,
+        true
+      );
+      if (anchor) {
+        state.pan.pinchAnchorNormX = anchor.x;
+        state.pan.pinchAnchorNormY = anchor.y;
+      } else {
+        state.pan.pinchAnchorNormX = 0.5;
+        state.pan.pinchAnchorNormY = 0.5;
+      }
+    }
     beginPinchPreview();
     return true;
   }
@@ -1325,11 +1345,15 @@
       return false;
     }
     const previous = state.pan.lastTouchCenter || center;
-    panByDelta(center.x - previous.x, center.y - previous.y);
+    const movedByTouch =
+      Math.abs(center.x - previous.x) >= 0.1 || Math.abs(center.y - previous.y) >= 0.1;
     state.pan.touchActive = true;
     state.pan.lastTouchCenter = center;
+    state.pan.pinchPendingCenterX = center.x;
+    state.pan.pinchPendingCenterY = center.y;
 
     const distance = getTouchDistance();
+    let zoomChanged = false;
     if (Number.isFinite(distance) && distance > 0) {
       if (!state.pan.pinchStartDistance || state.pan.pinchStartDistance <= 0) {
         state.pan.pinchStartDistance = distance;
@@ -1340,12 +1364,19 @@
       const nextZoom = Math.max(0.1, Math.min(5, Number(rawZoom.toFixed(2))));
       if (Math.abs(nextZoom - state.pageZoom) >= 0.01) {
         state.pageZoom = nextZoom;
+        zoomChanged = true;
         state.pan.pinchNeedsCommitRender = true;
         setZoomSelectValue(state.pageZoom);
         updatePageRadiusScale();
-        const scale = state.pageZoom / Math.max(0.1, state.pan.pinchStartZoom);
-        schedulePinchPreviewRender(scale);
       }
+    }
+    const scale = state.pageZoom / Math.max(0.1, state.pan.pinchStartZoom);
+    if (state.pan.pinchPreviewActive) {
+      if (zoomChanged || movedByTouch) {
+        schedulePinchPreviewRender(scale, center);
+      }
+    } else if (movedByTouch) {
+      panByDelta(center.x - previous.x, center.y - previous.y);
     }
     event.preventDefault();
     return true;
@@ -1397,50 +1428,37 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  function getNormalizedPointerPoint(event) {
+  function getNormalizedRenderPointFromClient(clientX, clientY, clampToBounds) {
     const rect = overlayCanvas.getBoundingClientRect();
     if (!rect.width || !rect.height) {
       return null;
     }
-    const xPx = event.clientX - rect.left;
-    const yPx = event.clientY - rect.top;
     const box = state.renderBox;
     if (!box || box.width <= 0 || box.height <= 0) {
       return null;
     }
+    const xPx = clientX - rect.left;
+    const yPx = clientY - rect.top;
+    const xRaw = (xPx - box.left) / box.width;
+    const yRaw = (yPx - box.top) / box.height;
     if (
-      xPx < box.left ||
-      xPx > box.left + box.width ||
-      yPx < box.top ||
-      yPx > box.top + box.height
+      !clampToBounds &&
+      (xRaw < 0 || xRaw > 1 || yRaw < 0 || yRaw > 1)
     ) {
       return null;
     }
-    const x = (xPx - box.left) / box.width;
-    const y = (yPx - box.top) / box.height;
     return {
-      x: Math.max(0, Math.min(1, x)),
-      y: Math.max(0, Math.min(1, y)),
+      x: Math.max(0, Math.min(1, xRaw)),
+      y: Math.max(0, Math.min(1, yRaw)),
     };
   }
 
+  function getNormalizedPointerPoint(event) {
+    return getNormalizedRenderPointFromClient(event.clientX, event.clientY, false);
+  }
+
   function getNormalizedPointerPointClamped(event) {
-    const rect = overlayCanvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return null;
-    }
-    const box = state.renderBox;
-    if (!box || box.width <= 0 || box.height <= 0) {
-      return null;
-    }
-    const xPx = event.clientX - rect.left;
-    const yPx = event.clientY - rect.top;
-    const x = (xPx - box.left) / box.width;
-    const y = (yPx - box.top) / box.height;
-    return {
-      x: Math.max(0, Math.min(1, x)),
-      y: Math.max(0, Math.min(1, y)),
-    };
+    return getNormalizedRenderPointFromClient(event.clientX, event.clientY, true);
   }
 
   function initializePageModels(pageDescriptors) {
@@ -1522,6 +1540,10 @@
     state.pan.pinchStartDistance = 0;
     state.pan.pinchStartZoom = 1;
     state.pan.pinchNeedsCommitRender = false;
+    state.pan.pinchPendingCenterX = 0;
+    state.pan.pinchPendingCenterY = 0;
+    state.pan.pinchAnchorNormX = 0.5;
+    state.pan.pinchAnchorNormY = 0.5;
     stopPinchPreview(false);
     stopMiddlePan();
     state.renderBox = {
@@ -1962,15 +1984,23 @@
     state.pan.pinchPreviewBaseWidth = baseWidth;
     state.pan.pinchPreviewBaseHeight = baseHeight;
     state.pan.pinchPendingScale = 1;
+    if (state.pan.lastTouchCenter) {
+      state.pan.pinchPendingCenterX = state.pan.lastTouchCenter.x;
+      state.pan.pinchPendingCenterY = state.pan.lastTouchCenter.y;
+    }
     overlayCanvas.style.visibility = "hidden";
     renderPinchPreviewFromCache(1);
   }
 
-  function schedulePinchPreviewRender(scale) {
+  function schedulePinchPreviewRender(scale, center) {
     if (!state.pan.pinchPreviewActive) {
       return;
     }
     state.pan.pinchPendingScale = Math.max(0.2, Math.min(8, scale));
+    if (center) {
+      state.pan.pinchPendingCenterX = center.x;
+      state.pan.pinchPendingCenterY = center.y;
+    }
     if (state.pan.pinchRafId) {
       return;
     }
@@ -2004,6 +2034,32 @@
     state.pan.pinchRafTimeout = false;
   }
 
+  function alignPinchAnchorToCenter(centerClientX, centerClientY) {
+    if (!appShell || !viewerContainer) {
+      return;
+    }
+    if (!Number.isFinite(centerClientX) || !Number.isFinite(centerClientY)) {
+      return;
+    }
+    const shellRect = appShell.getBoundingClientRect();
+    const viewerRect = viewerContainer.getBoundingClientRect();
+    if (!viewerRect.width || !viewerRect.height) {
+      return;
+    }
+    const anchorNormX = Math.max(0, Math.min(1, Number(state.pan.pinchAnchorNormX) || 0.5));
+    const anchorNormY = Math.max(0, Math.min(1, Number(state.pan.pinchAnchorNormY) || 0.5));
+    const viewerContentLeft =
+      viewerRect.left - shellRect.left + appShell.scrollLeft;
+    const viewerContentTop =
+      viewerRect.top - shellRect.top + appShell.scrollTop;
+    const anchorContentX = viewerContentLeft + anchorNormX * viewerRect.width;
+    const anchorContentY = viewerContentTop + anchorNormY * viewerRect.height;
+    const centerViewportX = centerClientX - shellRect.left;
+    const centerViewportY = centerClientY - shellRect.top;
+    appShell.scrollLeft = anchorContentX - centerViewportX;
+    appShell.scrollTop = anchorContentY - centerViewportY;
+  }
+
   function renderPinchPreviewFromCache(scale) {
     if (!state.pan.pinchPreviewActive) {
       return;
@@ -2035,6 +2091,10 @@
       width: size.width,
       height: size.height,
     };
+    alignPinchAnchorToCenter(
+      state.pan.pinchPendingCenterX,
+      state.pan.pinchPendingCenterY
+    );
   }
 
   function stopPinchPreview(commitRender) {
@@ -2045,6 +2105,10 @@
     state.pan.pinchPreviewBaseWidth = 0;
     state.pan.pinchPreviewBaseHeight = 0;
     state.pan.pinchPendingScale = 1;
+    state.pan.pinchPendingCenterX = 0;
+    state.pan.pinchPendingCenterY = 0;
+    state.pan.pinchAnchorNormX = 0.5;
+    state.pan.pinchAnchorNormY = 0.5;
     overlayCanvas.style.visibility = "";
     if (commitRender) {
       const scroll = getAppShellScrollPosition();
